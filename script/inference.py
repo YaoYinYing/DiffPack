@@ -27,7 +27,7 @@ from diffpack.engine import DiffusionEngine
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", "--config", help="yaml configuration file",
-                        default=f"{run_dir}/config/inference.yaml")
+                        default=f"{run_dir}/config/inference_confidence.yaml")
     parser.add_argument("--seed", help="random seed", type=int, default=0)
     parser.add_argument("-o", "--output_dir", help="output directory", default="output")
     parser.add_argument("-f", "--pdb_files", help="list of pdb files", nargs='*', default=[])
@@ -82,7 +82,7 @@ if __name__ == "__main__":
     logger = util.get_root_logger()
     if comm.get_rank() == 0:
         logger.warning("Config file: %s" % args.config)
-        logger.warning(pprint.pformat(cfg))
+        #logger.warning(pprint.pformat(cfg))
         logger.warning("Output dir: %s" % args.output_dir)
 
     solver = build_solver(cfg, logger)
