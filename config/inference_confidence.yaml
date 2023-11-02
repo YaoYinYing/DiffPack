@@ -78,7 +78,7 @@ engine:
   batch_size: 32
   log_interval: 1000
 
-model_checkpoint: ~/scratch/trained_model/diffpack/gearnet_edge_confidence_converted.pth
+model_checkpoint: ~/Documents/protein_design/DiffPack/model/gearnet_edge_confidence_converted.pth
 
 train:
   num_epoch: 0

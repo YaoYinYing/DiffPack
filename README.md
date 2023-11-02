@@ -20,6 +20,17 @@ pip install biopython==1.77
 pip install pyyaml
 pip install easydict
 ```
+
+for Mac with Apple Silicon M1/2/3:
+```shell
+conda create -n diffpack python=3.10
+conda activate diffpack
+pip3 install torch torchvision torchaudio
+pip install torch-scatter torch-cluster -f https://pytorch-geometric.com/whl/torch-1.9.0+cu102.html
+pip install torch-geometric
+pip install git+https://github.com/DeepGraphLearning/torchdrug
+pip install -r <repo-to>/DiffPack/requirements.txt
+```
 ![framwork](asset/diffpack.png)
 
 ## Model Checkpoints

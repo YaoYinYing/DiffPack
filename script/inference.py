@@ -16,7 +16,10 @@ from torchdrug.utils import comm
 
 patch(nn, "Module", nn._Module)
 
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
+run_dir=os.path.dirname(os.path.dirname(__file__))
+
+sys.path.append(run_dir)
 from diffpack import util, dataset, task
 from diffpack.engine import DiffusionEngine
 
@@ -24,7 +27,7 @@ from diffpack.engine import DiffusionEngine
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", "--config", help="yaml configuration file",
-                        default="config/inference.yaml")
+                        default=f"{run_dir}/config/inference.yaml")
     parser.add_argument("--seed", help="random seed", type=int, default=0)
     parser.add_argument("-o", "--output_dir", help="output directory", default="output")
     parser.add_argument("-f", "--pdb_files", help="list of pdb files", nargs='*', default=[])
