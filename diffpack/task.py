@@ -158,8 +158,19 @@ class TorsionalDiffusion(tasks.Task, core.Configurable):
     @torch.no_grad()
     def generate(self, batch, randomize=True):
         protein = batch['graph']
+        repack_residue_mask = getattr(protein, "repack_residue_mask", None)
+        if repack_residue_mask is not None:
+            repack_residue_mask = repack_residue_mask.to(protein.device).bool()
+            repack_chi_mask = repack_residue_mask.unsqueeze(-1).expand(-1, self.NUM_CHI_ANGLES)
+        else:
+            repack_chi_mask = None
+
+        original_protein = protein.clone()
         if randomize:
             protein = rotamer.randomize(protein)
+            if repack_residue_mask is not None:
+                keep_atom_mask = (~repack_residue_mask)[protein.atom2residue]
+                protein.node_position[keep_atom_mask] = original_protein.node_position[keep_atom_mask]
 
         schedule = self.schedule_1pi_periodic.reverse_t_schedule.to(self.device)
         for chi_id in tqdm(range(self.NUM_CHI_ANGLES), desc="Autoregressive generation"):
@@ -178,9 +189,15 @@ class TorsionalDiffusion(tasks.Task, core.Configurable):
                 })
 
                 # Step backward
-                chis = self.schedule_1pi_periodic.step(chis, pred_score, t, dt, chi_protein.chi_1pi_periodic_mask)
-                chis = self.schedule_2pi_periodic.step(chis, pred_score, t, dt, chi_protein.chi_2pi_periodic_mask)
+                chi_1pi_periodic_mask = chi_protein.chi_1pi_periodic_mask
+                chi_2pi_periodic_mask = chi_protein.chi_2pi_periodic_mask
+                if repack_chi_mask is not None:
+                    chi_1pi_periodic_mask = chi_1pi_periodic_mask & repack_chi_mask
+                    chi_2pi_periodic_mask = chi_2pi_periodic_mask & repack_chi_mask
+                chis = self.schedule_1pi_periodic.step(chis, pred_score, t, dt, chi_1pi_periodic_mask)
+                chis = self.schedule_2pi_periodic.step(chis, pred_score, t, dt, chi_2pi_periodic_mask)
                 protein = rotamer.set_chis(protein, chis)
+        batch["graph"] = protein
         return batch
 
     def get_metric(self, pred_protein, true_protein, metric):
@@ -262,16 +279,20 @@ class ConfidencePrediction(TorsionalDiffusion):
     @torch.no_grad()
     def generate(self, batch, randomize=True):
         protein = batch['graph']
-        if randomize:
-            protein = rotamer.randomize(protein)
+        repack_residue_mask = getattr(protein, "repack_residue_mask", None)
+        if repack_residue_mask is not None:
+            repack_residue_mask = repack_residue_mask.to(self.device).bool()
 
-        best_protein = protein.clone()
+        input_protein = protein.clone()
+        best_protein = input_protein.clone()
         best_rmsd = torch.zeros(protein.num_residue, device=self.device) + 1e6
         for _ in tqdm(range(self.num_sample), desc="Confidence sampling"):
-            batch = super().generate(batch, randomize=True)  # TODO: do we need to randomize?
-            protein = batch['graph']
-            rmsd = self.predict_rmsd(batch)
+            sampled_batch = super().generate({"graph": input_protein.clone()}, randomize=randomize)
+            protein = sampled_batch['graph']
+            rmsd = self.predict_rmsd(sampled_batch)
             residue_update_mask = rmsd < best_rmsd  # [num_residue]
+            if repack_residue_mask is not None:
+                residue_update_mask = residue_update_mask & repack_residue_mask
             atom_update_mask = residue_update_mask[protein.atom2residue]  # [num_atom]
             best_protein.node_position[atom_update_mask] = protein.node_position[atom_update_mask]
             best_rmsd[residue_update_mask] = rmsd[residue_update_mask]

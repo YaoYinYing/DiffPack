@@ -9,7 +9,7 @@ from torchdrug.core import Registry as R
 from torchdrug.layers import functional
 from tqdm import tqdm
 
-from diffpack import rotamer
+from diffpack import rotamer, repack
 from diffpack.rotamer import get_chi_mask, atom_name_vocab, bb_atom_name
 
 logging.basicConfig(level=logging.DEBUG)
@@ -23,6 +23,19 @@ class SideChainDataset(data.ProteinDataset):
     exclude_pdb_files = []
 
     def __init__(self, path=None, pdb_files=None, verbose=1, **kwargs):
+        center_residues = kwargs.pop("center_residues", None)
+        repack_radius = kwargs.pop("repack_radius", None)
+        center_residues = center_residues or []
+        self.center_residue_selectors = repack.parse_center_residue_selectors(center_residues)
+        self.repack_radius = repack_radius
+
+        if self.repack_radius is not None and len(self.center_residue_selectors) == 0:
+            raise ValueError("`center_residues` must be provided when `repack_radius` is set.")
+        if self.repack_radius is None and len(self.center_residue_selectors) > 0:
+            raise ValueError("`repack_radius` must be provided when `center_residues` is set.")
+        if self.repack_radius is not None and self.repack_radius <= 0:
+            raise ValueError(f"`repack_radius` must be > 0, got {self.repack_radius}.")
+
         if path is not None:
             logger.info("Loading dataset from folder %s" % path)
             path = os.path.expanduser(path)
@@ -127,6 +140,28 @@ class SideChainDataset(data.ProteinDataset):
             protein.atom37_mask[protein.atom2residue, protein.atom_name] = True
             protein.sidechain37_mask = protein.atom37_mask.clone()  # [num_residue, 37]
             protein.sidechain37_mask[:, bb_atom_name] = False
+
+            if self.repack_radius is None:
+                protein.repack_residue_mask = torch.ones(protein.num_residue, dtype=torch.bool, device=protein.device)
+            else:
+                residue_identifiers = repack.load_residue_identifiers_from_pdb(
+                    self.pdb_files[index], allowed_residue_names=rotamer.residue_list
+                )
+                repack_residue_mask, _ = repack.select_residues_by_radius(
+                    atom_positions=protein.node_position,
+                    atom2residue=protein.atom2residue,
+                    num_residue=protein.num_residue,
+                    residue_identifiers=residue_identifiers,
+                    center_selectors=self.center_residue_selectors,
+                    radius=self.repack_radius,
+                )
+                protein.repack_residue_mask = repack_residue_mask
+                logger.info(
+                    "Selected %d / %d residues for repacking in %s",
+                    int(repack_residue_mask.sum().item()),
+                    int(protein.num_residue),
+                    os.path.basename(self.pdb_files[index]),
+                )
         item = {"graph": protein}
 
         if self.transform:
@@ -140,4 +175,3 @@ class SideChainDataset(data.ProteinDataset):
     def __repr__(self):
         lines = ["#sample: %d" % len(self)]
         return "%s(  %s)" % (self.__class__.__name__, "\n  ".join(lines))
-

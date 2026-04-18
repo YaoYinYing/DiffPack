@@ -31,7 +31,14 @@ def parse_args():
     parser.add_argument("--seed", help="random seed", type=int, default=0)
     parser.add_argument("-o", "--output_dir", help="output directory", default="output")
     parser.add_argument("-f", "--pdb_files", help="list of pdb files", nargs='*', default=[])
+    parser.add_argument("--center_residues", help="center residues in CHAIN:RESID format", nargs='*', default=[])
+    parser.add_argument("--repack_radius", help="radius (Angstrom) around center residues to repack", type=float,
+                        default=None)
     args = parser.parse_known_args()[0]
+    if args.repack_radius is not None and not args.center_residues:
+        parser.error("`--center_residues` must be provided when `--repack_radius` is set.")
+    if args.center_residues and args.repack_radius is None:
+        parser.error("`--repack_radius` must be provided when `--center_residues` is set.")
     args.output_dir = os.path.expanduser(args.output_dir)
     args.output_dir = os.path.realpath(args.output_dir)
 
@@ -77,6 +84,8 @@ if __name__ == "__main__":
     args.config = os.path.realpath(args.config)
     cfg = util.load_config(args.config)
     cfg.test_set.pdb_files = args.pdb_files
+    cfg.test_set.center_residues = args.center_residues
+    cfg.test_set.repack_radius = args.repack_radius
 
     set_seed(args.seed)
     logger = util.get_root_logger()
