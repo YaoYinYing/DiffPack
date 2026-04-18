@@ -1,78 +1,101 @@
-# DiffPack: A Torsional Diffusion Model for Autoregressive Protein Side-Chain Packing
-**DiffPack** is a novel torsional diffusion model designed for predicting the conformation of protein side-chains based on their backbones, as introduced in [arxiv link](https://arxiv.org/abs/2306.01794). By learning the joint distribution of side-chain torsional angles through a process of diffusing and denoising on the torsional space, DiffPack significantly improves angle accuracy across various benchmarks for protein side-chain packing. 
+# DiffPack
 
+DiffPack is a torsional diffusion model for protein side-chain packing.
 
-## Installation
-You can install DiffPack with the following commands, which will install all the dependencies.
-```shell
-conda create -n diffpack python=3.8
-conda activate diffpack
+This repository now ships as a pip-installable package built with `flit_core`, with a modern CLI and backend abstraction.
+
+## Quick Start
+
+### 1) Install package
+
+```bash
+pip install -e ".[torch]"
 ```
 
-```shell
-conda install pytorch torchvision torchaudio pytorch-cuda=11.7 -c pytorch -c nvidia
-conda install pyg -c pyg
-conda install torchdrug -c milagraph -c conda-forge -c pytorch -c pyg
+### 2) Install backend runtime dependencies
+
+Vendored runtime code is included under `src/diffpack/torchdrug`.
+
+```bash
+pip install -e ".[torchdrug_fork]"
 ```
 
-```shell
-pip install biopython==1.77
-pip install pyyaml
-pip install easydict
+### 3) Run inference
+
+```bash
+diffpack-infer \
+  -c src/diffpack/config/inference_confidence.yaml \
+  --seed 2023 \
+  --output_dir output \
+  --pdb_files 1ubq.pdb \
+  --center_residues A:72 \
+  --repack_radius 10 \
+  --hetero_policy exclude \
+  --backend torchdrug_fork \
+  --device cpu
 ```
 
-for Mac with Apple Silicon M1/2/3:
-```shell
-conda create -n diffpack python=3.10
-conda activate diffpack
-pip3 install torch torchvision torchaudio
-pip install torch-scatter torch-cluster -f https://pytorch-geometric.com/whl/torch-1.9.0+cu102.html
-pip install torch-geometric
-pip install git+https://github.com/DeepGraphLearning/torchdrug
-pip install -r <repo-to>/DiffPack/requirements.txt
+Legacy entrypoint is still available temporarily:
+
+```bash
+python script/inference.py --help
 ```
-![framwork](asset/diffpack.png)
 
-## Model Checkpoints
-We provide several versions of DiffPack, each with its own configuration and checkpoint:
+## CLI
 
-| Model                                 | Config                                     | Checkpoint            |
-|---------------------------------------|--------------------------------------------|-----------------------|
-| DiffPack (Vanila)                     | [Config](config/inference.yaml)            | [Google Drive Link](https://drive.google.com/file/d/1tZ9ZOjIxq9SxrkdvbLJyLUBbt2P-mksO/view?usp=sharing) |
- | DiffPack (with Confidence Prediction) | [Config](config/inference_confidence.yaml) | [Google Drive Link](https://drive.google.com/file/d/1tZ9ZOjIxq9SxrkdvbLJyLUBbt2P-mksO/view?usp=sharing) |
+```text
+diffpack-infer [options]
 
-The Vanilla version of DiffPack is the base model, 
-while the version with Confidence Prediction includes an additional feature that estimates the confidence score of the predicted side-chain conformation.
-
-Most of the configuration is specified in the configuration file. We list some important configuration hyperparameters here:
-- `mode`: Backward mode in diffusion process. We use `ode` or `sde` for DiffPack.
-- `annealed_temp`: Annealing temperature in diffusion process. We use `3` for DiffPack. Ideally, higher value corresponds to lower temperature.
-- `num_sample`: Number of samples in diffusion process. Confidence model will decide which sample to use.
-
-## Running DiffPack
-To use DiffPack for new proteins on your local machine, we provide the necessary configuration files in the `config` folder. 
-For instance, if you have two pdb files `1a3a.pdb` and `1a3b.pdb`, 
-you can run the following command to infer new proteins and save the results in your chosen output folder:
-```shell
-python script/inference.py -c config/inference_confidence.yaml \
-                           --seed 2023 \
-                           --output_dir path/to/output \
-                           --pdb_files 1a3a.pdb 1a3b.pdb ...
+--backend {torchdrug_fork,pyg}
+--device {cpu,cuda,mps}
+--diagnose
+--profile
+--fast
+--center_residues CHAIN:RESID ...
+--repack_radius FLOAT
+--hetero_policy {exclude,context_only,error}
 ```
-This command will generate and save the predicted side-chain conformations for the given proteins. 
 
-## Retraining DiffPack
-For those interested in training DiffPack on their own datasets, we will soon release the code and instructions for this process. 
-Stay tuned for updates!
+`--diagnose` prints runtime/compiler/backend capabilities and exits.
 
-## Visualization of Results
-![Visualization](asset/result.png)
+## Backend Notes
 
-## License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+- `torchdrug_fork`: default and production path.
+- `pyg`: transitional adapter path; CLI/API is stable while migration progresses.
+
+## MPS and macOS
+
+- MPS is supported at the DiffPack runtime layer (`--device mps`) when backend runtime supports it.
+- OpenMP flags are not required in DiffPack itself; TorchDrug fork/toolchain setup controls extension compile flags.
+
+## Testing
+
+```bash
+pytest -q
+```
+
+## Benchmarks
+
+```bash
+python benchmarks/run_benchmark.py --device cpu --backend torchdrug_fork
+python benchmarks/run_benchmark.py --device mps --backend torchdrug_fork
+```
+
+NumPy compatibility status is tracked in [docs/numpy-compatibility.md](docs/numpy-compatibility.md).
+
+## Structure Checker
+
+```bash
+diffpack-check-structure \
+  --input 1ubq.pdb \
+  --output output/1ubq.pdb \
+  --metadata output/run_metadata.json \
+  --report output/checker.json
+```
+
 ## Citation
-If you find DiffPack useful in your research or project, please cite our paper:
-```
+
+```bibtex
 @article{zhang2023diffpack,
   title={DiffPack: A Torsional Diffusion Model for Autoregressive Protein Side-Chain Packing},
   author={Zhang, Yangtian and Zhang, Zuobai and Zhong, Bozitao and Misra, Sanchit and Tang, Jian},
@@ -80,4 +103,3 @@ If you find DiffPack useful in your research or project, please cite our paper:
   year={2023}
 }
 ```
-

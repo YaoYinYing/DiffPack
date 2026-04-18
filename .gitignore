@@ -1,3 +1,8 @@
 
 model/gearnet_edge_confidence_converted.pth
 *.pyc
+/tmp
+*.whl
+/dist
+log.txt
+src/diffpack/.DS_Store

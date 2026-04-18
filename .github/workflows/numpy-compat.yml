@@ -1,0 +1,41 @@
+name: NumPy Compatibility
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/**"
+      - "test/**"
+      - ".github/workflows/numpy-compat.yml"
+      - "pyproject.toml"
+
+jobs:
+  numpy-compat:
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.numpy.allow_failure }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        numpy:
+          - version: "1.26.4"
+            allow_failure: false
+          - version: "2.0.2"
+            allow_failure: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package and runtime deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,torchdrug_fork]"
+          pip install "numpy==${{ matrix.numpy.version }}"
+      - name: Run tests
+        run: |
+          pytest -q
+      - name: Smoke + checker
+        run: |
+          diffpack-infer -c src/diffpack/config/inference_confidence.yaml --seed 2023 --output_dir numpy_compat_output --pdb_files 1ubq.pdb --device cpu
+          diffpack-check-structure --input 1ubq.pdb --output numpy_compat_output/1ubq.pdb --metadata numpy_compat_output/run_metadata.json --report numpy_compat_output/checker.json

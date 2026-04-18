@@ -1,5 +1,5 @@
 import pytest
-import torch
+torch = pytest.importorskip("torch")
 
 from diffpack import repack
 
