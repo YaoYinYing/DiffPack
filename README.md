@@ -61,7 +61,8 @@ diffpack-infer [options]
 ## Backend Notes
 
 - `torchdrug_fork`: default and production path.
-- `pyg`: transitional adapter path; CLI/API is stable while migration progresses.
+- `pyg`: native PyG inference path (no implicit fallback to `torchdrug_fork` when explicitly selected).
+- Current native PyG support target is the shipped inference configs (`inference.yaml`, `inference_confidence.yaml`).
 
 ## MPS and macOS
 
@@ -79,6 +80,7 @@ pytest -q
 ```bash
 python benchmarks/run_benchmark.py --device cpu --backend torchdrug_fork
 python benchmarks/run_benchmark.py --device mps --backend torchdrug_fork
+python benchmarks/run_benchmark.py --device cpu --backend pyg --reference_backend torchdrug_fork
 ```
 
 NumPy compatibility status is tracked in [docs/numpy-compatibility.md](docs/numpy-compatibility.md).

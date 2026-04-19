@@ -6,6 +6,9 @@ import os
 import time
 from pathlib import Path
 
+import numpy as np
+from Bio.PDB import PDBParser
+
 from diffpack.backends import InferenceRequest, get_backend_adapter
 from diffpack.checker import run_structure_checks
 from diffpack.util import get_default_config_path
@@ -22,7 +25,28 @@ def parse_args():
     parser.add_argument("--center_residues", nargs="*", default=[])
     parser.add_argument("--repack_radius", type=float, default=None)
     parser.add_argument("--hetero_policy", choices=["exclude", "context_only", "error"], default="exclude")
+    parser.add_argument("--reference_backend", choices=["torchdrug_fork", "pyg"], default=None)
+    parser.add_argument("--parity_max_abs_tolerance", type=float, default=10.0)
+    parser.add_argument("--parity_mean_tolerance", type=float, default=2.0)
     return parser.parse_args()
+
+
+def _compute_pdb_deltas(pred_pdb: str, ref_pdb: str) -> dict[str, float]:
+    parser = PDBParser(QUIET=True)
+    pred = parser.get_structure("pred", pred_pdb)
+    ref = parser.get_structure("ref", ref_pdb)
+    deltas = []
+    for pred_atom, ref_atom in zip(pred.get_atoms(), ref.get_atoms()):
+        deltas.append(float(np.linalg.norm(pred_atom.coord - ref_atom.coord)))
+    if not deltas:
+        return {"num_atoms_compared": 0, "max_abs_delta": 0.0, "mean_abs_delta": 0.0, "p95_abs_delta": 0.0}
+    arr = np.array(deltas)
+    return {
+        "num_atoms_compared": int(arr.size),
+        "max_abs_delta": float(arr.max()),
+        "mean_abs_delta": float(arr.mean()),
+        "p95_abs_delta": float(np.percentile(arr, 95)),
+    }
 
 
 def main():
@@ -60,6 +84,44 @@ def main():
         checker_reports.append(report)
     result["checker_reports"] = checker_reports
     result["checker_status"] = "pass" if all(r["status"] == "pass" for r in checker_reports) else "fail"
+
+    if args.reference_backend and args.reference_backend != args.backend:
+        ref_output_dir = os.path.join(args.output_dir, f"reference_{args.reference_backend}")
+        ref_request = InferenceRequest(
+            config=request.config,
+            seed=request.seed,
+            output_dir=ref_output_dir,
+            pdb_files=request.pdb_files,
+            center_residues=request.center_residues,
+            repack_radius=request.repack_radius,
+            hetero_policy=request.hetero_policy,
+            device=request.device,
+            fast=request.fast,
+            profile=request.profile,
+        )
+        ref_result = get_backend_adapter(args.reference_backend).run_inference(ref_request)
+        ref_files = ref_result.get("output_files", [])
+        parity_reports = []
+        for pred_file, ref_file in zip(output_files, ref_files):
+            report = _compute_pdb_deltas(pred_file, ref_file)
+            report["prediction_file"] = pred_file
+            report["reference_file"] = ref_file
+            report["passes_tolerance"] = (
+                report["max_abs_delta"] <= args.parity_max_abs_tolerance
+                and report["mean_abs_delta"] <= args.parity_mean_tolerance
+            )
+            parity_reports.append(report)
+        result["parity_against"] = args.reference_backend
+        result["parity_reports"] = parity_reports
+        result["parity_status"] = "pass" if all(r["passes_tolerance"] for r in parity_reports) else "fail"
+        result["parity_stage"] = None if result["parity_status"] == "pass" else "benchmark.metric_delta"
+        if parity_reports:
+            result["metric_delta_vs_reference"] = {
+                "max_abs_delta": max(r["max_abs_delta"] for r in parity_reports),
+                "mean_abs_delta": max(r["mean_abs_delta"] for r in parity_reports),
+                "p95_abs_delta": max(r["p95_abs_delta"] for r in parity_reports),
+                "num_atoms_compared": sum(r["num_atoms_compared"] for r in parity_reports),
+            }
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

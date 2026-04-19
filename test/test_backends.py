@@ -1,7 +1,10 @@
 import pytest
+torch = pytest.importorskip("torch")
 
 from diffpack.backends import get_backend_adapter
 from diffpack.backends.base import InferenceRequest
+from diffpack.backends.pyg_runtime import PygConfigTranslator, PygTorsionalDiffusion
+from diffpack.util import get_default_config_path, load_config
 
 
 def test_get_torchdrug_backend():
@@ -19,7 +22,7 @@ def test_unknown_backend():
         get_backend_adapter("unknown_backend")
 
 
-def test_pyg_transitional_metadata(monkeypatch, tmp_path):
+def test_pyg_native_metadata(monkeypatch, tmp_path):
     adapter = get_backend_adapter("pyg")
 
     captured = {}
@@ -43,5 +46,22 @@ def test_pyg_transitional_metadata(monkeypatch, tmp_path):
     )
     result = adapter.run_inference(request)
     assert result["backend_requested"] == "pyg"
-    assert result["backend_effective"] == "torchdrug_fork"
-    assert captured["backend_mode"] == "fallback"
+    assert result["backend_effective"] == "pyg"
+    assert captured["backend_mode"] == "native"
+    assert captured["fallback_reason"] is None
+
+
+def test_pyg_translator_builds_torsional_task():
+    cfg = load_config(get_default_config_path("inference.yaml"))
+    translator = PygConfigTranslator(cfg)
+    task = translator.build_task()
+    assert isinstance(task, PygTorsionalDiffusion)
+    assert task.graph_construction_model is not None
+
+
+def test_pyg_translator_rejects_unknown_model_class():
+    cfg = load_config(get_default_config_path("inference.yaml"))
+    cfg.task.model["class"] = "UnknownModel"
+    translator = PygConfigTranslator(cfg)
+    with pytest.raises(ValueError, match="supports.*GearNet"):
+        translator.build_task()

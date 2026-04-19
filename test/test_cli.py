@@ -30,3 +30,6 @@ def test_run_diagnostics_outputs_json(capsys):
     payload = json.loads(out)
     assert "torch_version" in payload
     assert "platform" in payload
+    pyg_preview = payload["backend_resolution_preview"]["pyg"]
+    assert pyg_preview["backend_effective"] == "pyg"
+    assert pyg_preview["backend_mode"] == "native"

@@ -2,7 +2,6 @@ import math
 import numpy as np
 
 import torch
-from diffpack.torchdrug.data import Protein
 
 from diffpack.util import rot_matmul, rot_vec_mul
 
@@ -72,7 +71,7 @@ symm_sc_res_atoms = {
 }
 res_sym_atom_posn = -torch.ones(len(residue_list), 2, 2, dtype=torch.long)
 for res, [[a, b], [c, d]] in symm_sc_res_atoms.items():
-    res_sym_atom_posn[Protein.residue2id[res]] = torch.tensor([
+    res_sym_atom_posn[residue_vocab[res]] = torch.tensor([
         [atom_name_vocab[c], atom_name_vocab[d]],
         [atom_name_vocab[a], atom_name_vocab[b]]
     ])

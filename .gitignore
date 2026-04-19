@@ -6,3 +6,10 @@ model/gearnet_edge_confidence_converted.pth
 /dist
 log.txt
 src/diffpack/.DS_Store
+/output_torchdrug_baseline/.cache
+/output_torchdrug_baseline/.torch_extensions
+/benchmark_output
+/output_pyg_mask
+/output_pyg_native
+/output_torchdrug_baseline
+/benchmark_output_pyg_vs_td

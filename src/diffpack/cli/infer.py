@@ -77,9 +77,9 @@ def run_diagnostics():
         },
         "pyg": {
             "backend_requested": "pyg",
-            "backend_effective": "torchdrug_fork",
-            "backend_mode": "fallback",
-            "fallback_reason": "pyg_transitional_adapter",
+            "backend_effective": "pyg",
+            "backend_mode": "native",
+            "fallback_reason": None,
         },
     }
     print(json.dumps(diagnostics, indent=2, sort_keys=True))
