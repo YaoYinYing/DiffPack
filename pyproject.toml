@@ -25,6 +25,7 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
+  "torch>=2.3.0",
   "numpy>=1.26.4",
   "pyyaml>=6.0",
   "easydict>=1.10",
@@ -34,11 +35,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-torch = [
-  "torch>=2.3.0",
-]
-torchdrug_fork = [
-  "torch>=2.3.0",
+torchdrug = [
   "torch-scatter>=2.1.2",
   "torch-cluster>=1.6.3",
   "torch-geometric>=2.6.0",
@@ -52,8 +49,9 @@ torchdrug_fork = [
   "decorator",
 ]
 pyg = [
-  "torch>=2.3.0",
   "torch-geometric>=2.6.0",
+  "torch-scatter>=2.1.2",
+  "torch-cluster>=1.6.3",
 ]
 dev = [
   "pytest>=8.0",

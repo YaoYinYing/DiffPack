@@ -3,13 +3,18 @@ torch = pytest.importorskip("torch")
 
 from diffpack.backends import get_backend_adapter
 from diffpack.backends.base import InferenceRequest
-from diffpack.backends.pyg_runtime import PygConfigTranslator, PygTorsionalDiffusion
+from diffpack.backends.native_runtime import NativeConfigTranslator, PygTorsionalDiffusion
 from diffpack.util import get_default_config_path, load_config
 
 
 def test_get_torchdrug_backend():
-    adapter = get_backend_adapter("torchdrug_fork")
-    assert adapter.name == "torchdrug_fork"
+    adapter = get_backend_adapter("torchdrug")
+    assert adapter.name == "torchdrug"
+
+
+def test_get_native_backend():
+    adapter = get_backend_adapter("native")
+    assert adapter.name == "native"
 
 
 def test_get_pyg_backend():
@@ -22,8 +27,8 @@ def test_unknown_backend():
         get_backend_adapter("unknown_backend")
 
 
-def test_pyg_native_metadata(monkeypatch, tmp_path):
-    adapter = get_backend_adapter("pyg")
+def test_native_metadata(monkeypatch, tmp_path):
+    adapter = get_backend_adapter("native")
 
     captured = {}
 
@@ -45,23 +50,23 @@ def test_pyg_native_metadata(monkeypatch, tmp_path):
         profile=False,
     )
     result = adapter.run_inference(request)
-    assert result["backend_requested"] == "pyg"
-    assert result["backend_effective"] == "pyg"
+    assert result["backend_requested"] == "native"
+    assert result["backend_effective"] == "native"
     assert captured["backend_mode"] == "native"
     assert captured["fallback_reason"] is None
 
 
-def test_pyg_translator_builds_torsional_task():
+def test_native_translator_builds_torsional_task():
     cfg = load_config(get_default_config_path("inference.yaml"))
-    translator = PygConfigTranslator(cfg)
+    translator = NativeConfigTranslator(cfg)
     task = translator.build_task()
     assert isinstance(task, PygTorsionalDiffusion)
     assert task.graph_construction_model is not None
 
 
-def test_pyg_translator_rejects_unknown_model_class():
+def test_native_translator_rejects_unknown_model_class():
     cfg = load_config(get_default_config_path("inference.yaml"))
     cfg.task.model["class"] = "UnknownModel"
-    translator = PygConfigTranslator(cfg)
+    translator = NativeConfigTranslator(cfg)
     with pytest.raises(ValueError, match="supports.*GearNet"):
         translator.build_task()

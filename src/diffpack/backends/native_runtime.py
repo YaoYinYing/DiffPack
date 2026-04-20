@@ -14,9 +14,6 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch_geometric.data import Data
-from torch_geometric.nn import MessagePassing
-from torch_geometric.nn.pool import knn_graph as _pyg_knn_graph, radius_graph as _pyg_radius_graph
 
 from diffpack import repack, rotamer, util
 from diffpack.device import choose_torch_device, move_to_device
@@ -24,6 +21,13 @@ try:
     from rdkit import Chem
 except Exception:  # pragma: no cover - optional at runtime
     Chem = None
+
+try:
+    from torch_cluster import knn_graph as _knn_graph_impl, radius_graph as _radius_graph_impl
+except Exception:  # pragma: no cover - runtime optional acceleration
+    _knn_graph_impl = None
+    _radius_graph_impl = None
+
 
 def _scatter_add(src: torch.Tensor, index: torch.Tensor, dim_size: int) -> torch.Tensor:
     out = src.new_zeros((dim_size,) + src.shape[1:])
@@ -59,8 +63,8 @@ def _pairwise_edges(position: torch.Tensor, batch: torch.Tensor) -> tuple[torch.
 
 
 def _knn_graph(position: torch.Tensor, k: int, batch: torch.Tensor) -> torch.Tensor:
-    if _pyg_knn_graph is not None:
-        return _pyg_knn_graph(position, k=k, batch=batch, loop=False)
+    if _knn_graph_impl is not None:
+        return _knn_graph_impl(position, k=k, batch=batch, loop=False)
 
     src, dst = _pairwise_edges(position, batch)
     if src.numel() == 0:
@@ -84,8 +88,8 @@ def _knn_graph(position: torch.Tensor, k: int, batch: torch.Tensor) -> torch.Ten
 
 
 def _radius_graph(position: torch.Tensor, radius: float, batch: torch.Tensor, max_num_neighbors: int) -> torch.Tensor:
-    if _pyg_radius_graph is not None:
-        return _pyg_radius_graph(
+    if _radius_graph_impl is not None:
+        return _radius_graph_impl(
             position,
             r=radius,
             batch=batch,
@@ -120,14 +124,13 @@ def _radius_graph(position: torch.Tensor, radius: float, batch: torch.Tensor, ma
     return torch.stack([torch.cat(edge_src), torch.cat(edge_dst)], dim=0)
 
 
-class PygProteinGraph(Data):
-    def __init__(self, protein: Any, edge_list: torch.Tensor, edge_feature: torch.Tensor | None, num_relation: int, edge_weight: torch.Tensor | None = None):
-        super().__init__()
-        self.protein = protein
-        self.edge_list = edge_list
-        self.edge_feature = edge_feature
-        self.num_relation = int(num_relation)
-        self.edge_weight = edge_weight
+@dataclass
+class PygProteinGraph:
+    protein: Any
+    edge_list: torch.Tensor
+    edge_feature: torch.Tensor | None
+    num_relation: int
+    edge_weight: torch.Tensor | None = None
 
     @property
     def device(self):
@@ -353,11 +356,11 @@ class PygGraphConstruction(nn.Module):
         )
 
 
-class PygRelationalGraphConv(MessagePassing):
+class PygRelationalGraphConv(nn.Module):
     eps = 1e-10
 
     def __init__(self, input_dim, output_dim, num_relation, edge_input_dim=None, batch_norm=False, activation="relu"):
-        super().__init__(aggr="add", flow="source_to_target")
+        super().__init__()
         self.input_dim = int(input_dim)
         self.output_dim = int(output_dim)
         self.num_relation = int(num_relation)
@@ -368,36 +371,25 @@ class PygRelationalGraphConv(MessagePassing):
         self.batch_norm = nn.BatchNorm1d(self.output_dim) if batch_norm else None
         self.activation = getattr(F, activation) if isinstance(activation, str) else activation
 
-    def message(self, x_j: torch.Tensor, edge_attr: torch.Tensor | None, edge_weight: torch.Tensor | None):
-        msg = x_j
-        if self.edge_linear is not None and edge_attr is not None:
-            msg = msg + self.edge_linear(edge_attr.float())
-        if edge_weight is not None:
-            msg = msg * edge_weight.to(msg.dtype).unsqueeze(-1)
-        return msg
+    def aggregate(self, graph: PygProteinGraph, message: torch.Tensor):
+        node_out = graph.edge_list[:, 1] * self.num_relation + graph.edge_list[:, 2]
+        if graph.edge_weight is None:
+            edge_weight = torch.ones(graph.num_edge, device=graph.device, dtype=message.dtype)
+        else:
+            edge_weight = graph.edge_weight.to(message.dtype)
+        weighted = message * edge_weight.unsqueeze(-1)
+        denom = _scatter_add(edge_weight.unsqueeze(-1), node_out, graph.num_node * self.num_relation)
+        update = _scatter_add(weighted, node_out, graph.num_node * self.num_relation) / (denom + self.eps)
+        return update.view(graph.num_node, self.num_relation * self.input_dim)
 
     def forward(self, graph: PygProteinGraph, input_feature: torch.Tensor):
         if graph.num_relation != self.num_relation:
             raise ValueError(f"Relation mismatch: graph={graph.num_relation} layer={self.num_relation}")
         node_in = graph.edge_list[:, 0]
-        relation = graph.edge_list[:, 2]
-        node_out = graph.edge_list[:, 1] * self.num_relation + relation
-        msg = self.message(
-            x_j=input_feature[node_in],
-            edge_attr=graph.edge_feature,
-            edge_weight=graph.edge_weight,
-        )
-        denom = None
-        if graph.edge_weight is None:
-            denom = _scatter_add(
-                torch.ones((graph.num_edge, 1), dtype=msg.dtype, device=graph.device),
-                node_out,
-                graph.num_node * self.num_relation,
-            )
-        else:
-            denom = _scatter_add(graph.edge_weight.unsqueeze(-1).to(msg.dtype), node_out, graph.num_node * self.num_relation)
-        update = _scatter_add(msg, node_out, graph.num_node * self.num_relation) / (denom + self.eps)
-        update = update.view(graph.num_node, self.num_relation * self.input_dim)
+        message = input_feature[node_in]
+        if self.edge_linear is not None and graph.edge_feature is not None:
+            message = message + self.edge_linear(graph.edge_feature.float())
+        update = self.aggregate(graph, message)
         output = self.linear(update) + self.self_loop(input_feature)
         if self.batch_norm is not None:
             output = self.batch_norm(output)
@@ -407,8 +399,14 @@ class PygRelationalGraphConv(MessagePassing):
 
 
 class PygGeometricRelationalGraphConv(PygRelationalGraphConv):
-    # pass
-    ...
+    def aggregate(self, graph: PygProteinGraph, message: torch.Tensor):
+        node_out = graph.edge_list[:, 1] * self.num_relation + graph.edge_list[:, 2]
+        if graph.edge_weight is None:
+            weighted = message
+        else:
+            weighted = message * graph.edge_weight.to(message.dtype).unsqueeze(-1)
+        update = _scatter_add(weighted, node_out, graph.num_node * self.num_relation)
+        return update.view(graph.num_node, self.num_relation * self.input_dim)
 
 
 @dataclass
@@ -1394,7 +1392,7 @@ class PygConfigTranslator:
         return PygSideChainDataset(**ds_cfg)
 
 
-class PygRunner:
+class NativeRunner:
     def _configure_runtime_environment(self, output_dir: str):
         os.makedirs(output_dir, exist_ok=True)
         os.environ.setdefault("TORCH_EXTENSIONS_DIR", os.path.join(output_dir, ".torch_extensions"))
@@ -1513,4 +1511,6 @@ class PygRunner:
         return metadata
 
 
-PygNativeRunner = PygRunner
+# Backward-compatible internal aliases for code that still references old symbol names.
+PygNativeRunner = NativeRunner
+NativeConfigTranslator = PygConfigTranslator

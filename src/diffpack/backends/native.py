@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from diffpack.backends.base import BackendAdapter, InferenceRequest
-from diffpack.backends.pyg_runtime import PygNativeRunner
+from diffpack.backends.native_runtime import NativeRunner
 
 
-class PygNativeAdapter(BackendAdapter):
-    """Native PyG inference adapter."""
+class NativeAdapter(BackendAdapter):
+    """Custom native inference adapter (no torch_geometric dependency)."""
 
-    name = "pyg"
+    name = "native"
 
     def __init__(self):
-        self._runner = PygNativeRunner()
+        self._runner = NativeRunner()
 
     def run_inference(self, request: InferenceRequest) -> dict[str, object]:
         return self._runner.run(

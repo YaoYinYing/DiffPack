@@ -4,8 +4,8 @@ from diffpack.backends.base import BackendAdapter, InferenceRequest
 from diffpack.backends.torchdrug_compatible_runner import TorchDrugCompatibleRunner
 
 
-class TorchDrugForkAdapter(BackendAdapter):
-    name = "torchdrug_fork"
+class TorchDrugAdapter(BackendAdapter):
+    name = "torchdrug"
 
     def __init__(self):
         self._runner = TorchDrugCompatibleRunner()

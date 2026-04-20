@@ -9,15 +9,16 @@ This repository now ships as a pip-installable package built with `flit_core`, w
 ### 1) Install package
 
 ```bash
-pip install -e ".[torch]"
+pip install -e .
 ```
 
-### 2) Install backend runtime dependencies
+### 2) Optional backend runtime dependencies
 
-Vendored runtime code is included under `src/diffpack/torchdrug`.
+Vendored TorchDrug runtime code is included under `src/diffpack/torchdrug`.
 
 ```bash
-pip install -e ".[torchdrug_fork]"
+pip install -e ".[torchdrug]"
+pip install -e ".[pyg]"
 ```
 
 ### 3) Run inference
@@ -31,7 +32,7 @@ diffpack-infer \
   --center_residues A:72 \
   --repack_radius 10 \
   --hetero_policy exclude \
-  --backend torchdrug_fork \
+  --backend native \
   --device cpu
 ```
 
@@ -46,7 +47,7 @@ python script/inference.py --help
 ```text
 diffpack-infer [options]
 
---backend {torchdrug_fork,pyg}
+--backend {native,torchdrug,pyg}
 --device {cpu,cuda,mps}
 --diagnose
 --profile
@@ -60,14 +61,14 @@ diffpack-infer [options]
 
 ## Backend Notes
 
-- `torchdrug_fork`: default and production path.
-- `pyg`: native PyG inference path (no implicit fallback to `torchdrug_fork` when explicitly selected).
-- Current native PyG support target is the shipped inference configs (`inference.yaml`, `inference_confidence.yaml`).
+- `native`: default backend, no `torch_geometric` dependency path.
+- `torchdrug`: internal TorchDrug backend (vendored code under `src/diffpack/torchdrug`).
+- `pyg`: torch_geometric-native backend.
 
 ## MPS and macOS
 
 - MPS is supported at the DiffPack runtime layer (`--device mps`) when backend runtime supports it.
-- OpenMP flags are not required in DiffPack itself; TorchDrug fork/toolchain setup controls extension compile flags.
+- OpenMP flags are not required in DiffPack itself; vendored TorchDrug runtime/toolchain setup controls extension compile flags.
 
 ## Testing
 
@@ -78,10 +79,12 @@ pytest -q
 ## Benchmarks
 
 ```bash
-python benchmarks/run_benchmark.py --device cpu --backend torchdrug_fork
-python benchmarks/run_benchmark.py --device mps --backend torchdrug_fork
-python benchmarks/run_benchmark.py --device cpu --backend pyg --reference_backend torchdrug_fork
+python benchmarks/run_benchmark.py --device cpu --backend native
+python benchmarks/run_benchmark.py --device cpu --backend torchdrug
+python benchmarks/run_benchmark.py --device cpu --backend pyg --reference_backend torchdrug
 ```
+
+Benchmarks run strict geometry checks (ported from DLPacker checker logic) and fail checker status when severe clashes or bond outliers are detected.
 
 NumPy compatibility status is tracked in [docs/numpy-compatibility.md](docs/numpy-compatibility.md).
 
@@ -92,7 +95,14 @@ diffpack-check-structure \
   --input 1ubq.pdb \
   --output output/1ubq.pdb \
   --metadata output/run_metadata.json \
+  --strict_geometry \
   --report output/checker.json
+```
+
+## Live Test
+
+```bash
+python scripts/live_test_inference.py --backend native --device cpu --pdb_file 1ubq.pdb
 ```
 
 ## Citation

@@ -9,6 +9,7 @@ from typing import Iterable
 import torch
 
 from diffpack import repack
+from diffpack.structure_checker import check_structure, compare_reports
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,9 @@ def run_structure_checks(
     center_residues: Iterable[str] | None = None,
     repack_radius: float | None = None,
     metadata_path: str | None = None,
+    strict_geometry: bool = False,
+    clash_threshold: float = 1.0,
+    top_n_clashes: int = 20,
 ) -> dict:
     checks = []
     errors = []
@@ -167,6 +171,86 @@ def run_structure_checks(
                 break
         checks.append({"name": "metric_sanity", "ok": metric_ok, "details": metric_checks})
 
+    geometry_report = None
+    try:
+        input_geom = check_structure(
+            input_pdb,
+            clash_threshold=float(clash_threshold),
+            top_n_clashes=int(top_n_clashes),
+        )
+        output_geom = check_structure(
+            output_pdb,
+            clash_threshold=float(clash_threshold),
+            top_n_clashes=int(top_n_clashes),
+        )
+        delta_geom = compare_reports(
+            before=input_geom,
+            after=output_geom,
+            clash_threshold=float(clash_threshold),
+            top_n=int(top_n_clashes),
+        )
+        geometry_report = {
+            "clash_threshold": float(clash_threshold),
+            "input": {
+                "heavy_atom_count": int(input_geom.heavy_atom_count),
+                "min_inter_residue_distance": float(input_geom.min_inter_residue_distance),
+                "p1_inter_residue_distance": float(input_geom.p1_inter_residue_distance),
+                "p5_inter_residue_distance": float(input_geom.p5_inter_residue_distance),
+                "missing_sidechain_atoms_count": len(input_geom.missing_sidechain_atoms),
+                "bond_length_outliers_count": len(input_geom.bond_length_outliers),
+                "severe_clashes_count": len(input_geom.severe_clashes),
+            },
+            "output": {
+                "heavy_atom_count": int(output_geom.heavy_atom_count),
+                "min_inter_residue_distance": float(output_geom.min_inter_residue_distance),
+                "p1_inter_residue_distance": float(output_geom.p1_inter_residue_distance),
+                "p5_inter_residue_distance": float(output_geom.p5_inter_residue_distance),
+                "missing_sidechain_atoms_count": len(output_geom.missing_sidechain_atoms),
+                "bond_length_outliers_count": len(output_geom.bond_length_outliers),
+                "severe_clashes_count": len(output_geom.severe_clashes),
+            },
+            "delta": {
+                "before_min_inter_residue_distance": float(delta_geom.before_min_inter_residue_distance),
+                "after_min_inter_residue_distance": float(delta_geom.after_min_inter_residue_distance),
+                "worsened_clash_count": int(delta_geom.worsened_clash_count),
+            },
+            "top_severe_clashes_output": [
+                {
+                    "distance": float(c.distance),
+                    "atom_a": c.atom_a,
+                    "atom_b": c.atom_b,
+                }
+                for c in output_geom.severe_clashes
+            ],
+        }
+
+        if strict_geometry:
+            checks.append(
+                {
+                    "name": "no_severe_clashes",
+                    "ok": len(output_geom.severe_clashes) == 0,
+                    "details": {"count": len(output_geom.severe_clashes)},
+                }
+            )
+            checks.append(
+                {
+                    "name": "no_bond_length_outliers",
+                    "ok": len(output_geom.bond_length_outliers) == 0,
+                    "details": {"count": len(output_geom.bond_length_outliers)},
+                }
+            )
+            checks.append(
+                {
+                    "name": "no_worsened_severe_clashes",
+                    "ok": delta_geom.worsened_clash_count == 0,
+                    "details": {"count": int(delta_geom.worsened_clash_count)},
+                }
+            )
+    except Exception as exc:
+        geometry_report = {"error": str(exc)}
+        if strict_geometry:
+            checks.append({"name": "geometry_checker_runtime", "ok": False, "details": {"error": str(exc)}})
+
     status = "pass" if all(c["ok"] for c in checks) else "fail"
     if status == "fail":
         errors = [c["name"] for c in checks if not c["ok"]]
@@ -176,4 +260,5 @@ def run_structure_checks(
         "output_pdb": str(Path(output_pdb).resolve()),
         "checks": checks,
         "errors": errors,
+        "geometry": geometry_report,
     }

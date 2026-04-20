@@ -11,6 +11,7 @@ import numpy as np
 import torch
 
 from diffpack import rotamer, util
+from diffpack.backends.native_runtime import NativeConfigTranslator
 from diffpack.backends.pyg_runtime import PygConfigTranslator
 from diffpack.device import choose_torch_device, move_to_device
 
@@ -182,8 +183,13 @@ def _load_torchdrug_task_and_protein(cfg, device: torch.device):
     return task_module, protein
 
 
-def _load_pyg_task_and_protein(cfg, device: torch.device):
-    translator = PygConfigTranslator(cfg)
+def _load_framework_task_and_protein(cfg, device: torch.device, backend: str):
+    if backend == "pyg":
+        translator = PygConfigTranslator(cfg)
+    elif backend == "native":
+        translator = NativeConfigTranslator(cfg)
+    else:
+        raise ValueError(f"Unsupported translated backend `{backend}` for parity trace")
     task_module = translator.build_task().to(device)
     if "model_checkpoint" in cfg and cfg.model_checkpoint:
         ckpt = torch.load(os.path.expanduser(cfg.model_checkpoint), map_location=torch.device("cpu"))
@@ -196,7 +202,7 @@ def _load_pyg_task_and_protein(cfg, device: torch.device):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Stagewise parity trace between torchdrug_fork and pyg backends")
+    parser = argparse.ArgumentParser(description="Stagewise parity trace between torchdrug and native/pyg backends")
     parser.add_argument("--config", required=True, help="inference config yaml")
     parser.add_argument("--pdb_file", required=True, help="single pdb path (e.g., 1ubq.pdb)")
     parser.add_argument("--output_dir", default="benchmark_output/parity_trace", help="output directory")
@@ -205,6 +211,8 @@ def parse_args():
     parser.add_argument("--center_residues", nargs="*", default=[])
     parser.add_argument("--repack_radius", type=float, default=None)
     parser.add_argument("--hetero_policy", choices=["exclude", "context_only", "error"], default="exclude")
+    parser.add_argument("--backend", choices=["native", "pyg"], default="pyg")
+    parser.add_argument("--reference_backend", choices=["torchdrug"], default="torchdrug")
     parser.add_argument("--max_abs_tolerance", type=float, default=1e-5)
     parser.add_argument("--mean_tolerance", type=float, default=1e-6)
     return parser.parse_args()
@@ -230,7 +238,7 @@ def main():
     cfg.test_set.hetero_policy = args.hetero_policy
 
     td_task, td_protein = _load_torchdrug_task_and_protein(cfg, device)
-    pyg_task, pyg_protein = _load_pyg_task_and_protein(cfg, device)
+    run_task, run_protein = _load_framework_task_and_protein(cfg, device, args.backend)
 
     trace_td = {
         "dataset": _pack_protein_stage(td_protein),
@@ -238,29 +246,29 @@ def main():
         "schedule": _schedule_stage(td_task, device),
         "generation": _generation_stage(td_task, td_protein, randomize=True, seed=args.seed),
     }
-    trace_pyg = {
-        "dataset": _pack_protein_stage(pyg_protein),
-        "graph": _build_graph_stage(pyg_task, pyg_protein),
-        "schedule": _schedule_stage(pyg_task, device),
-        "generation": _generation_stage(pyg_task, pyg_protein, randomize=True, seed=args.seed),
+    trace_run = {
+        "dataset": _pack_protein_stage(run_protein),
+        "graph": _build_graph_stage(run_task, run_protein),
+        "schedule": _schedule_stage(run_task, device),
+        "generation": _generation_stage(run_task, run_protein, randomize=True, seed=args.seed),
     }
 
     diffs = [
-        _summarize_delta(trace_td["dataset"]["atom2residue"], trace_pyg["dataset"]["atom2residue"], "dataset.atom2residue"),
-        _summarize_delta(trace_td["dataset"]["node_feature"], trace_pyg["dataset"]["node_feature"], "dataset.node_feature"),
-        _summarize_delta(trace_td["dataset"]["chi_mask"], trace_pyg["dataset"]["chi_mask"], "dataset.chi_mask"),
-        _summarize_delta(trace_td["graph"]["edge_list"], trace_pyg["graph"]["edge_list"], "graph.edge_list"),
-        _summarize_delta(trace_td["schedule"]["sigma"], trace_pyg["schedule"]["sigma"], "schedule.sigma"),
-        _summarize_delta(trace_td["generation"]["pred_scores"], trace_pyg["generation"]["pred_scores"], "generation.pred_scores"),
-        _summarize_delta(trace_td["generation"]["chi_states"], trace_pyg["generation"]["chi_states"], "generation.chi_states"),
-        _summarize_delta(trace_td["generation"]["final_node_position"], trace_pyg["generation"]["final_node_position"], "generation.final_node_position"),
+        _summarize_delta(trace_td["dataset"]["atom2residue"], trace_run["dataset"]["atom2residue"], "dataset.atom2residue"),
+        _summarize_delta(trace_td["dataset"]["node_feature"], trace_run["dataset"]["node_feature"], "dataset.node_feature"),
+        _summarize_delta(trace_td["dataset"]["chi_mask"], trace_run["dataset"]["chi_mask"], "dataset.chi_mask"),
+        _summarize_delta(trace_td["graph"]["edge_list"], trace_run["graph"]["edge_list"], "graph.edge_list"),
+        _summarize_delta(trace_td["schedule"]["sigma"], trace_run["schedule"]["sigma"], "schedule.sigma"),
+        _summarize_delta(trace_td["generation"]["pred_scores"], trace_run["generation"]["pred_scores"], "generation.pred_scores"),
+        _summarize_delta(trace_td["generation"]["chi_states"], trace_run["generation"]["chi_states"], "generation.chi_states"),
+        _summarize_delta(trace_td["generation"]["final_node_position"], trace_run["generation"]["final_node_position"], "generation.final_node_position"),
     ]
     first_div = _first_divergence(diffs, atol=args.max_abs_tolerance, mtol=args.mean_tolerance)
     parity_status = "pass" if first_div is None else "fail"
 
     report = {
-        "backend_requested": "pyg",
-        "backend_effective": "pyg",
+        "backend_requested": args.backend,
+        "backend_effective": args.backend,
         "backend_mode": "native",
         "fallback_reason": None,
         "parity_status": parity_status,
@@ -272,7 +280,7 @@ def main():
         "stage_diffs": [asdict(d) for d in diffs],
     }
 
-    np.savez_compressed(out_dir / "trace_torchdrug_fork.npz", **{
+    np.savez_compressed(out_dir / "trace_torchdrug.npz", **{
         "dataset_atom2residue": trace_td["dataset"]["atom2residue"],
         "dataset_node_feature": trace_td["dataset"]["node_feature"],
         "dataset_chi_mask": trace_td["dataset"]["chi_mask"],
@@ -282,15 +290,15 @@ def main():
         "generation_chi_states": trace_td["generation"]["chi_states"],
         "generation_final_node_position": trace_td["generation"]["final_node_position"],
     })
-    np.savez_compressed(out_dir / "trace_pyg.npz", **{
-        "dataset_atom2residue": trace_pyg["dataset"]["atom2residue"],
-        "dataset_node_feature": trace_pyg["dataset"]["node_feature"],
-        "dataset_chi_mask": trace_pyg["dataset"]["chi_mask"],
-        "graph_edge_list": trace_pyg["graph"]["edge_list"],
-        "schedule_sigma": trace_pyg["schedule"]["sigma"],
-        "generation_pred_scores": trace_pyg["generation"]["pred_scores"],
-        "generation_chi_states": trace_pyg["generation"]["chi_states"],
-        "generation_final_node_position": trace_pyg["generation"]["final_node_position"],
+    np.savez_compressed(out_dir / f"trace_{args.backend}.npz", **{
+        "dataset_atom2residue": trace_run["dataset"]["atom2residue"],
+        "dataset_node_feature": trace_run["dataset"]["node_feature"],
+        "dataset_chi_mask": trace_run["dataset"]["chi_mask"],
+        "graph_edge_list": trace_run["graph"]["edge_list"],
+        "schedule_sigma": trace_run["schedule"]["sigma"],
+        "generation_pred_scores": trace_run["generation"]["pred_scores"],
+        "generation_chi_states": trace_run["generation"]["chi_states"],
+        "generation_final_node_position": trace_run["generation"]["final_node_position"],
     })
     (out_dir / "parity_trace_report.json").write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps(report, indent=2, sort_keys=True))

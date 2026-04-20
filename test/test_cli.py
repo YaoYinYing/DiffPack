@@ -30,6 +30,12 @@ def test_run_diagnostics_outputs_json(capsys):
     payload = json.loads(out)
     assert "torch_version" in payload
     assert "platform" in payload
+    native_preview = payload["backend_resolution_preview"]["native"]
+    assert native_preview["backend_effective"] == "native"
+    assert native_preview["backend_mode"] == "native"
+    torchdrug_preview = payload["backend_resolution_preview"]["torchdrug"]
+    assert torchdrug_preview["backend_effective"] == "torchdrug"
+    assert torchdrug_preview["backend_mode"] == "native"
     pyg_preview = payload["backend_resolution_preview"]["pyg"]
     assert pyg_preview["backend_effective"] == "pyg"
     assert pyg_preview["backend_mode"] == "native"

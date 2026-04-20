@@ -71,3 +71,21 @@ def test_structure_checker_metric_sanity(tmp_path: Path):
         metadata_path=str(metadata),
     )
     assert report["status"] == "pass"
+
+
+def test_structure_checker_strict_geometry_fail(tmp_path: Path):
+    input_pdb = tmp_path / "in.pdb"
+    output_pdb = tmp_path / "out.pdb"
+    _write_minimal_pdb(input_pdb, shift=0.0)
+    _write_minimal_pdb(output_pdb, shift=-9.0)
+    report = run_structure_checks(
+        input_pdb=str(input_pdb),
+        output_pdb=str(output_pdb),
+        strict_geometry=True,
+        clash_threshold=1.0,
+    )
+    assert report["status"] == "fail"
+    assert any(
+        err in report["errors"]
+        for err in ("no_severe_clashes", "no_worsened_severe_clashes", "geometry_checker_runtime")
+    )

@@ -13,3 +13,4 @@ src/diffpack/.DS_Store
 /output_pyg_native
 /output_torchdrug_baseline
 /benchmark_output_pyg_vs_td
+/smoke_runs

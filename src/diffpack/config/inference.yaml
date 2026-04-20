@@ -1,4 +1,4 @@
-backend: torchdrug_fork
+backend: native
 
 test_set:
   class: SideChainDataset

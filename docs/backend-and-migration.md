@@ -2,18 +2,19 @@
 
 ## Backends
 
-- `torchdrug_fork`: default production backend.
-- `pyg`: transitional backend contract; currently routed through torchdrug runtime while native migration lands.
+- `native`: default custom backend without torch_geometric.
+- `torchdrug`: vendored TorchDrug backend under `src/diffpack/torchdrug`.
+- `pyg`: torch_geometric-native backend.
 
-## Why a torchdrug fork
+## Why vendored torchdrug runtime
 
 DiffPack relies on APIs and runtime behavior not fully maintained upstream for modern Python / macOS / MPS needs.
 The maintained runtime is vendored in this repository under `src/diffpack/torchdrug`, so common users do not need
-an editable external fork checkout.
+an editable external checkout.
 
-## Sunset criteria for `torchdrug_fork`
+## Sunset criteria for `torchdrug`
 
-The fork can be sunset after the `pyg` backend reaches:
+The vendored torchdrug backend can be sunset after the `pyg` backend reaches:
 
 1. Inference feature parity (including selective radius repacking),
 2. Deterministic regression parity on fixed-seed test set,

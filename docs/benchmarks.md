@@ -7,7 +7,7 @@ Track runtime and regression across CPU and MPS as backend migration progresses.
 ## Command
 
 ```bash
-python benchmarks/run_benchmark.py --backend torchdrug_fork --device cpu --output_dir benchmark_output
+python benchmarks/run_benchmark.py --backend torchdrug --device cpu --output_dir benchmark_output
 ```
 
 ## Output

@@ -38,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="exclude",
         help="how to handle HETATM / non-canonical residues during packing",
     )
-    parser.add_argument("--backend", choices=["torchdrug_fork", "pyg"], default=None)
+    parser.add_argument("--backend", choices=["native", "torchdrug", "pyg"], default=None)
     parser.add_argument("--device", choices=["cpu", "cuda", "mps"], default="cpu")
     parser.add_argument("--diagnose", action="store_true", help="print runtime diagnostics and exit")
     parser.add_argument("--profile", action="store_true", help="write CPU profiler table to output directory")
@@ -69,9 +69,15 @@ def run_diagnostics():
         except OSError as error:
             diagnostics["openmp_clang_test"] = {"error": str(error)}
     diagnostics["backend_resolution_preview"] = {
-        "torchdrug_fork": {
-            "backend_requested": "torchdrug_fork",
-            "backend_effective": "torchdrug_fork",
+        "native": {
+            "backend_requested": "native",
+            "backend_effective": "native",
+            "backend_mode": "native",
+            "fallback_reason": None,
+        },
+        "torchdrug": {
+            "backend_requested": "torchdrug",
+            "backend_effective": "torchdrug",
             "backend_mode": "native",
             "fallback_reason": None,
         },
@@ -114,9 +120,9 @@ def main(argv: list[str] | None = None):
     if backend_name is None:
         try:
             with open(args.config, "r", encoding="utf-8") as f:
-                backend_name = (yaml.safe_load(f) or {}).get("backend", "torchdrug_fork")
+                backend_name = (yaml.safe_load(f) or {}).get("backend", "native")
         except FileNotFoundError:
-            backend_name = "torchdrug_fork"
+            backend_name = "native"
 
     request = InferenceRequest(
         config=args.config,

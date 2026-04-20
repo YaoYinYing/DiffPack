@@ -16,7 +16,7 @@ from diffpack.util import get_default_config_path
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run DiffPack benchmark")
-    parser.add_argument("--backend", default="torchdrug_fork", choices=["torchdrug_fork", "pyg"])
+    parser.add_argument("--backend", default="native", choices=["native", "torchdrug", "pyg"])
     parser.add_argument("--device", default="cpu", choices=["cpu", "cuda", "mps"])
     parser.add_argument("--config", default=get_default_config_path("inference_confidence.yaml"))
     parser.add_argument("--pdb_files", nargs="*", default=["1ubq.pdb"])
@@ -25,9 +25,11 @@ def parse_args():
     parser.add_argument("--center_residues", nargs="*", default=[])
     parser.add_argument("--repack_radius", type=float, default=None)
     parser.add_argument("--hetero_policy", choices=["exclude", "context_only", "error"], default="exclude")
-    parser.add_argument("--reference_backend", choices=["torchdrug_fork", "pyg"], default=None)
+    parser.add_argument("--reference_backend", choices=["native", "torchdrug", "pyg"], default=None)
     parser.add_argument("--parity_max_abs_tolerance", type=float, default=10.0)
     parser.add_argument("--parity_mean_tolerance", type=float, default=2.0)
+    parser.add_argument("--clash_threshold", type=float, default=1.0)
+    parser.add_argument("--top_n_clashes", type=int, default=20)
     return parser.parse_args()
 
 
@@ -80,6 +82,9 @@ def main():
             center_residues=args.center_residues,
             repack_radius=args.repack_radius,
             metadata_path=None,
+            strict_geometry=True,
+            clash_threshold=args.clash_threshold,
+            top_n_clashes=args.top_n_clashes,
         )
         checker_reports.append(report)
     result["checker_reports"] = checker_reports
