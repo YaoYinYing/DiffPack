@@ -1,4 +1,7 @@
 backend: native
+cache:
+  root: null
+  mode: read_only
 
 test_set:
   class: SideChainDataset
@@ -24,13 +27,15 @@ task:
     class: SO2VESchedule
     pi_periodic: true
     annealed_temp: 3
-    cache_folder:  ~/scratch/output/diffpack
+    cache_folder: null
+    cache_read_only: true
     mode: ode
   schedule_2pi_periodic:
     class: SO2VESchedule
     pi_periodic: false
     annealed_temp: 3
-    cache_folder:  ~/scratch/output/diffpack
+    cache_folder: null
+    cache_read_only: true
     mode: ode
   confidence_model:
     class: GearNet

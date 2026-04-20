@@ -1,8 +1,10 @@
 import pytest
 torch = pytest.importorskip("torch")
+import numpy as np
 
 from diffpack.backends import get_backend_adapter
 from diffpack.backends.base import InferenceRequest
+from diffpack.backends import native_runtime
 from diffpack.backends.native_runtime import NativeConfigTranslator, PygTorsionalDiffusion
 from diffpack.util import get_default_config_path, load_config
 
@@ -58,15 +60,31 @@ def test_native_metadata(monkeypatch, tmp_path):
 
 def test_native_translator_builds_torsional_task():
     cfg = load_config(get_default_config_path("inference.yaml"))
+    fake_p = np.ones((5001, 5001), dtype=np.float64)
+    fake_score = np.ones((5001, 5001), dtype=np.float64)
+    fake_norm = np.ones((5001,), dtype=np.float64)
+    original = native_runtime.load_schedule_tables_readonly
+    native_runtime.load_schedule_tables_readonly = lambda *_args, **_kwargs: (fake_p, fake_score, fake_norm)
     translator = NativeConfigTranslator(cfg)
-    task = translator.build_task()
-    assert isinstance(task, PygTorsionalDiffusion)
-    assert task.graph_construction_model is not None
+    try:
+        task = translator.build_task()
+        assert isinstance(task, PygTorsionalDiffusion)
+        assert task.graph_construction_model is not None
+    finally:
+        native_runtime.load_schedule_tables_readonly = original
 
 
 def test_native_translator_rejects_unknown_model_class():
     cfg = load_config(get_default_config_path("inference.yaml"))
     cfg.task.model["class"] = "UnknownModel"
+    fake_p = np.ones((5001, 5001), dtype=np.float64)
+    fake_score = np.ones((5001, 5001), dtype=np.float64)
+    fake_norm = np.ones((5001,), dtype=np.float64)
+    original = native_runtime.load_schedule_tables_readonly
+    native_runtime.load_schedule_tables_readonly = lambda *_args, **_kwargs: (fake_p, fake_score, fake_norm)
     translator = NativeConfigTranslator(cfg)
-    with pytest.raises(ValueError, match="supports.*GearNet"):
-        translator.build_task()
+    try:
+        with pytest.raises(ValueError, match="supports.*GearNet"):
+            translator.build_task()
+    finally:
+        native_runtime.load_schedule_tables_readonly = original

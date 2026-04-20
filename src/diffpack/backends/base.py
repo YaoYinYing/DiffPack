@@ -17,6 +17,8 @@ class InferenceRequest:
     device: str
     fast: bool
     profile: bool
+    cache_root: str | None = None
+    cache_read_only: bool = True
 
 
 class BackendAdapter(ABC):

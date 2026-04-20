@@ -10,6 +10,7 @@ import torch
 
 from diffpack import util
 from diffpack.device import choose_torch_device
+from diffpack.schedule_cache import resolve_cache_root, validate_required_schedule_caches
 
 
 class TorchDrugCompatibleRunner:
@@ -69,6 +70,15 @@ class TorchDrugCompatibleRunner:
         cfg.test_set.repack_radius = request.repack_radius
         cfg.test_set.hetero_policy = request.hetero_policy
         cfg.backend = backend_effective
+        cfg.cache = cfg.get("cache", {})
+        cfg.cache["root"] = resolve_cache_root(request.cache_root or cfg.cache.get("root"))
+        cfg.cache["mode"] = "read_only"
+        if not request.cache_read_only:
+            raise RuntimeError("Inference enforces read-only cache mode.")
+        for skey in ("schedule_1pi_periodic", "schedule_2pi_periodic"):
+            if skey in cfg.task:
+                cfg.task[skey]["cache_folder"] = cfg.cache["root"]
+                cfg.task[skey]["cache_read_only"] = True
 
         device = choose_torch_device(request.device)
         cfg._override_device = device
@@ -84,6 +94,25 @@ class TorchDrugCompatibleRunner:
             logger.warning("Config file: %s", request.config)
             logger.warning(pprint.pformat(cfg))
             logger.warning("Output dir: %s", request.output_dir)
+            logger.warning("Cache root: %s", cfg.cache["root"])
+            logger.warning("Cache mode: %s", cfg.cache["mode"])
+            logger.warning("Cache preflight validation: start")
+            cache_validation = validate_required_schedule_caches(cfg.cache["root"])
+            if cache_validation["errors"]:
+                raise RuntimeError(
+                    "Read-only cache validation failed. "
+                    f"cache_root={cfg.cache['root']} errors={cache_validation['errors']}. "
+                    f"Run `diffpack-prepare-cache --cache_root {cfg.cache['root']}` and retry."
+                )
+            logger.warning("Cache preflight validation: ok")
+        else:
+            cache_validation = validate_required_schedule_caches(cfg.cache["root"])
+            if cache_validation["errors"]:
+                raise RuntimeError(
+                    "Read-only cache validation failed. "
+                    f"cache_root={cfg.cache['root']} errors={cache_validation['errors']}. "
+                    f"Run `diffpack-prepare-cache --cache_root {cfg.cache['root']}` and retry."
+                )
 
         solver = self._build_solver(cfg, logger, core)
         test_set = core.Configurable.load_config_dict(cfg.test_set)
@@ -119,4 +148,13 @@ class TorchDrugCompatibleRunner:
         }
         if isinstance(run_summary, dict):
             metadata.update(run_summary)
+        metadata.update(
+            {
+                "cache_root": cfg.cache["root"],
+                "cache_mode": cfg.cache["mode"],
+                "cache_validation_status": "pass",
+                "cache_validation_errors": [],
+                "cache_keys": cache_validation["keys"],
+            }
+        )
         return metadata

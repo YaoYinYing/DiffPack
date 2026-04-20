@@ -18,10 +18,23 @@ def test_parse_args_requires_radius_when_center_residue_set():
 
 
 def test_parse_args_success():
-    args = infer.parse_args(["--center_residues", "A:72", "--repack_radius", "10", "--hetero_policy", "exclude"])
+    args = infer.parse_args(
+        [
+            "--center_residues",
+            "A:72",
+            "--repack_radius",
+            "10",
+            "--hetero_policy",
+            "exclude",
+            "--cache_root",
+            "/tmp/diffpack_cache_test",
+        ]
+    )
     assert args.repack_radius == 10
     assert args.center_residues == ["A:72"]
     assert args.hetero_policy == "exclude"
+    assert args.cache_read_only is True
+    assert args.cache_root.endswith("/tmp/diffpack_cache_test")
 
 
 def test_run_diagnostics_outputs_json(capsys):

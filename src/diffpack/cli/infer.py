@@ -43,6 +43,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--diagnose", action="store_true", help="print runtime diagnostics and exit")
     parser.add_argument("--profile", action="store_true", help="write CPU profiler table to output directory")
     parser.add_argument("--fast", action="store_true", help="safe deterministic runtime optimizations")
+    parser.add_argument("--cache_root", default=None, help="cache root override (default: platformdirs DiffPackCache)")
+    parser.add_argument(
+        "--cache_read_only",
+        action="store_true",
+        default=True,
+        help="enforce read-only cache behavior during inference (always enabled)",
+    )
     return parser
 
 
@@ -105,6 +112,8 @@ def parse_args(argv: list[str] | None = None):
     args.output_dir = os.path.realpath(os.path.expanduser(args.output_dir))
     args.config = os.path.realpath(os.path.expanduser(args.config))
     args.pdb_files = [os.path.realpath(os.path.expanduser(p)) for p in args.pdb_files]
+    if args.cache_root:
+        args.cache_root = os.path.realpath(os.path.expanduser(args.cache_root))
 
     return args
 
@@ -135,6 +144,8 @@ def main(argv: list[str] | None = None):
         device=args.device,
         fast=args.fast,
         profile=args.profile,
+        cache_root=args.cache_root,
+        cache_read_only=bool(args.cache_read_only),
     )
     adapter = get_backend_adapter(backend_name)
     metadata = adapter.run_inference(request)

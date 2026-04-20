@@ -28,6 +28,7 @@ dependencies = [
   "torch>=2.3.0",
   "numpy>=1.26.4",
   "pyyaml>=6.0",
+  "platformdirs>=4.2.0",
   "easydict>=1.10",
   "jinja2>=3.1",
   "tqdm>=4.66",
@@ -64,6 +65,7 @@ dev = [
 [project.scripts]
 diffpack-infer = "diffpack.cli.infer:main"
 diffpack-check-structure = "diffpack.cli.check_structure:main"
+diffpack-prepare-cache = "diffpack.cli.prepare_cache:main"
 
 [project.urls]
 Homepage = "https://github.com/DeepGraphLearning/DiffPack"

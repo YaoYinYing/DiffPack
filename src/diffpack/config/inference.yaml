@@ -1,4 +1,7 @@
 backend: native
+cache:
+  root: null
+  mode: read_only
 
 test_set:
   class: SideChainDataset
@@ -22,13 +25,15 @@ task:
     class: SO2VESchedule
     pi_periodic: true
     annealed_temp: 3
-    cache_folder:  /Users/yyy/Documents/protein_design/DiffPack/tmp
+    cache_folder: null
+    cache_read_only: true
     mode: ode
   schedule_2pi_periodic:
     class: SO2VESchedule
     pi_periodic: false
     annealed_temp: 3
-    cache_folder:  /Users/yyy/Documents/protein_design/DiffPack/tmp
+    cache_folder: null
+    cache_read_only: true
     mode: ode
   sigma_embedding:
     class: SigmaEmbeddingLayer

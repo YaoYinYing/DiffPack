@@ -24,6 +24,8 @@ pip install -e ".[pyg]"
 ### 3) Run inference
 
 ```bash
+diffpack-prepare-cache
+
 diffpack-infer \
   -c src/diffpack/config/inference_confidence.yaml \
   --seed 2023 \
@@ -34,6 +36,12 @@ diffpack-infer \
   --hetero_policy exclude \
   --backend native \
   --device cpu
+```
+
+Inference enforces read-only cache usage. If cache validation fails, run:
+
+```bash
+diffpack-prepare-cache [--cache_root /path/to/cache]
 ```
 
 Legacy entrypoint is still available temporarily:

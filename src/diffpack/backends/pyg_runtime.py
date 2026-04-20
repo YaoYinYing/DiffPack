@@ -3,8 +3,6 @@ from __future__ import annotations
 import os
 import pprint
 import time
-import tempfile
-import warnings
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +18,11 @@ from torch_geometric.nn.pool import knn_graph as _pyg_knn_graph, radius_graph as
 
 from diffpack import repack, rotamer, util
 from diffpack.device import choose_torch_device, move_to_device
+from diffpack.schedule_cache import (
+    load_schedule_tables_readonly,
+    resolve_cache_root,
+    validate_required_schedule_caches,
+)
 try:
     from rdkit import Chem
 except Exception:  # pragma: no cover - optional at runtime
@@ -646,59 +649,15 @@ class PygSO2Schedule(nn.Module):
     X_MIN, X_N = 1e-5, 5000
     SIGMA_MIN, SIGMA_MAX, SIGMA_N = 3e-3, 2, 5000
 
-    def __init__(self, PI: float, cache_folder: str | None):
+    def __init__(self, PI: float, cache_folder: str | None, cache_read_only: bool = True):
         super().__init__()
         self.PI = PI
-        requested_cache = os.path.expanduser(cache_folder) if cache_folder is not None else os.path.join(
-            os.path.dirname(__file__), "..", "cache"
-        )
-        self.cache_folder = self._ensure_writable_cache_dir(requested_cache)
-        self.x = 10 ** np.linspace(np.log10(self.X_MIN), 0, self.X_N + 1) * PI
-        self.sigma = 10 ** np.linspace(np.log10(self.SIGMA_MIN), np.log10(self.SIGMA_MAX), self.SIGMA_N + 1) * PI
-
-        self.p_table_path = os.path.join(self.cache_folder, f"Periodic.{PI:.3f}.p.npy")
-        self.score_table_path = os.path.join(self.cache_folder, f"Periodic.{PI:.3f}.score.npy")
-        self.score_norm_table_path = os.path.join(self.cache_folder, f"Periodic.{PI:.3f}.score_norm.npy")
-
-        if os.path.exists(self.p_table_path) and os.path.exists(self.score_table_path):
-            self.p_ = np.load(self.p_table_path)
-            self.score_ = np.load(self.score_table_path)
-        else:
-            self.p_ = _periodic_p(self.x, self.sigma[:, None], N=100, PI=PI)
-            self.score_ = _periodic_grad(self.x, self.sigma[:, None], N=100, PI=PI) / self.p_
-            try:
-                np.save(self.p_table_path, self.p_)
-                np.save(self.score_table_path, self.score_)
-            except OSError as exc:
-                warnings.warn(f"Unable to write schedule cache tables to `{self.cache_folder}`: {exc}")
-
-        if os.path.exists(self.score_norm_table_path):
-            self.score_norm_ = np.load(self.score_norm_table_path)
-        else:
-            score_norm_table = self.score(
-                _periodic_sample(self.sigma[None].repeat(10000, 0).flatten(), PI=PI),
-                self.sigma[None].repeat(10000, 0).flatten(),
-            ).reshape(10000, -1)
-            self.score_norm_ = (score_norm_table ** 2).mean(0)
-            try:
-                np.save(self.score_norm_table_path, self.score_norm_)
-            except OSError as exc:
-                warnings.warn(f"Unable to write schedule norm cache to `{self.cache_folder}`: {exc}")
-
-    @staticmethod
-    def _ensure_writable_cache_dir(path: str) -> str:
-        try:
-            os.makedirs(path, exist_ok=True)
-            probe = os.path.join(path, ".diffpack_write_probe")
-            with open(probe, "w", encoding="utf-8") as f:
-                f.write("ok")
-            os.remove(probe)
-            return path
-        except OSError as exc:
-            fallback = os.path.join(tempfile.gettempdir(), "diffpack_cache")
-            os.makedirs(fallback, exist_ok=True)
-            warnings.warn(f"Cache directory `{path}` is not writable ({exc}). Falling back to `{fallback}`.")
-            return fallback
+        self.cache_folder = resolve_cache_root(cache_folder)
+        if not cache_read_only:
+            raise RuntimeError(
+                "Inference cache is read-only. Use `diffpack-prepare-cache` to build/repair caches before inference."
+            )
+        self.p_, self.score_, self.score_norm_ = load_schedule_tables_readonly(self.cache_folder, PI)
 
     def score(self, x, sigma):
         x = (x + self.PI) % (2 * self.PI) - self.PI
@@ -735,6 +694,7 @@ class PygSO2VESchedule(PygSO2Schedule):
         self,
         pi_periodic=False,
         cache_folder=None,
+        cache_read_only=True,
         sigma_min=0.01 * np.pi,
         sigma_max=np.pi,
         annealed_temp=3,
@@ -742,7 +702,7 @@ class PygSO2VESchedule(PygSO2Schedule):
         **kwargs,
     ):
         PI = (0.5 * np.pi) if pi_periodic else np.pi
-        super().__init__(PI=PI, cache_folder=cache_folder)
+        super().__init__(PI=PI, cache_folder=cache_folder, cache_read_only=cache_read_only)
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
         self.sigma_min_log = np.log(sigma_min)
@@ -1344,6 +1304,7 @@ class PygConfigTranslator:
         self._expect_class(scfg, "SO2VESchedule", key)
         kwargs = dict(scfg)
         kwargs.pop("class", None)
+        kwargs.setdefault("cache_read_only", True)
         return PygSO2VESchedule(**kwargs)
 
     def build_task(self):
@@ -1436,6 +1397,15 @@ class PygRunner:
         cfg.test_set.repack_radius = request.repack_radius
         cfg.test_set.hetero_policy = request.hetero_policy
         cfg.backend = backend_effective
+        cfg.cache = cfg.get("cache", {})
+        cfg.cache["root"] = resolve_cache_root(request.cache_root or cfg.cache.get("root"))
+        cfg.cache["mode"] = "read_only"
+        if not request.cache_read_only:
+            raise RuntimeError("Inference enforces read-only cache mode.")
+        for skey in ("schedule_1pi_periodic", "schedule_2pi_periodic"):
+            if skey in cfg.task:
+                cfg.task[skey]["cache_folder"] = cfg.cache["root"]
+                cfg.task[skey]["cache_read_only"] = True
 
         device = choose_torch_device(request.device)
         if request.fast and getattr(cfg.task, "class", "") == "ConfidencePrediction" and "num_sample" in cfg.task:
@@ -1449,6 +1419,17 @@ class PygRunner:
         logger.warning("Config file: %s", request.config)
         logger.warning(pprint.pformat(cfg))
         logger.warning("Output dir: %s", request.output_dir)
+        logger.warning("Cache root: %s", cfg.cache["root"])
+        logger.warning("Cache mode: %s", cfg.cache["mode"])
+        logger.warning("Cache preflight validation: start")
+        cache_validation = validate_required_schedule_caches(cfg.cache["root"])
+        if cache_validation["errors"]:
+            raise RuntimeError(
+                "Read-only cache validation failed. "
+                f"cache_root={cfg.cache['root']} errors={cache_validation['errors']}. "
+                f"Run `diffpack-prepare-cache --cache_root {cfg.cache['root']}` and retry."
+            )
+        logger.warning("Cache preflight validation: ok")
 
         translator = PygConfigTranslator(cfg)
         task_module = translator.build_task()
@@ -1508,6 +1489,11 @@ class PygRunner:
             "metrics": metric_summary,
             "output_files": output_files,
             "checkpoint_load": ckpt_info,
+            "cache_root": cfg.cache["root"],
+            "cache_mode": cfg.cache["mode"],
+            "cache_validation_status": "pass",
+            "cache_validation_errors": [],
+            "cache_keys": cache_validation["keys"],
         }
         Path(request.output_dir).mkdir(parents=True, exist_ok=True)
         return metadata

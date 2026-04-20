@@ -6,64 +6,24 @@ import torch
 import torch.nn as nn
 from torch_scatter import scatter_add
 from diffpack.torchdrug import core
+from diffpack.schedule_cache import load_schedule_tables_readonly, resolve_cache_root
 
 from diffpack.torchdrug.core import Registry as R
-import tqdm
-
-
-def p(x, sigma, N=10, PI=np.pi):
-    p_ = 0
-    for i in tqdm.trange(-N, N + 1):
-        p_ += np.exp(-(x + 2 * PI * i) ** 2 / 2 / sigma ** 2)
-    return p_
-
-
-def grad(x, sigma, N=10, PI=np.pi):
-    p_ = 0
-    for i in tqdm.trange(-N, N + 1):
-        p_ += (x + 2 * PI * i) / sigma ** 2 * np.exp(-(x + 2 * PI * i) ** 2 / 2 / sigma ** 2)
-    return p_
-
-
-def sample(sigma, PI=np.pi):
-    out = sigma * np.random.randn(*sigma.shape)
-    out = (out + PI) % (2 * PI) - PI
-    return out
 
 
 class SO2Schedule(nn.Module, core.Configurable):
     X_MIN, X_N = 1e-5, 5000
     SIGMA_MIN, SIGMA_MAX, SIGMA_N = 3e-3, 2, 5000
 
-    def __init__(self, PI, cache_folder):
+    def __init__(self, PI, cache_folder, cache_read_only=True):
         super().__init__()
         self.PI = PI
-        self.cache_folder = os.path.expanduser(cache_folder) if cache_folder is not None \
-            else os.path.join(os.path.dirname(__file__), "cache")
-        self.x = 10 ** np.linspace(np.log10(self.X_MIN), 0,
-                                   self.X_N + 1) * PI
-        self.sigma = 10 ** np.linspace(np.log10(self.SIGMA_MIN), np.log10(self.SIGMA_MAX),
-                                       self.SIGMA_N + 1) * PI
-
-        os.makedirs(self.cache_folder, exist_ok=True)
-        self.p_table_path = os.path.join(self.cache_folder, f'Periodic.{PI:.3f}.p.npy')
-        self.score_table_path = os.path.join(self.cache_folder, f'Periodic.{PI:.3f}.score.npy')
-        if os.path.exists(self.p_table_path):
-            self.p_ = np.load(self.p_table_path)
-            self.score_ = np.load(self.score_table_path)
-        else:
-            self.p_ = p(self.x, self.sigma[:, None], N=100, PI=PI)
-            self.score_ = grad(self.x, self.sigma[:, None], N=100, PI=PI) / self.p_
-            np.save(self.p_table_path, self.p_)
-            np.save(self.score_table_path, self.score_)
-
-        # Precompute the normalization constant
-        score_norm_table = self.score(
-            sample(self.sigma[None].repeat(10000, 0).flatten(), PI=PI),
-            (self.sigma[None].repeat(10000, 0).flatten()),
-        ).reshape(10000, -1)
-
-        self.score_norm_ = (score_norm_table ** 2).mean(0)
+        self.cache_folder = resolve_cache_root(cache_folder)
+        if not cache_read_only:
+            raise RuntimeError(
+                "Inference cache is read-only. Use `diffpack-prepare-cache` to build/repair caches before inference."
+            )
+        self.p_, self.score_, self.score_norm_ = load_schedule_tables_readonly(self.cache_folder, PI)
 
     def score(self, x, sigma):
         x = (x + self.PI) % (2 * self.PI) - self.PI  # range from -pi to pi
@@ -153,14 +113,14 @@ class SO2Schedule(nn.Module, core.Configurable):
 
 @R.register('SO2VESchedule')
 class SO2VESchedule(SO2Schedule, core.Configurable):
-    def __init__(self, pi_periodic=False, cache_folder=None, sigma_min=0.01 * np.pi, sigma_max=np.pi, annealed_temp=3, mode="sde"):
+    def __init__(self, pi_periodic=False, cache_folder=None, cache_read_only=True, sigma_min=0.01 * np.pi, sigma_max=np.pi, annealed_temp=3, mode="sde"):
         """
         Args:
             sigma_min (float): minimum standard deviation
             sigma_max (float): maximum standard deviation
         """
         PI = 1/2 * np.pi if pi_periodic else np.pi  # TODO: remove ambiguity
-        super().__init__(PI, cache_folder)
+        super().__init__(PI, cache_folder, cache_read_only=cache_read_only)
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
         self.sigma_min_log = np.log(sigma_min)
@@ -292,7 +252,6 @@ class SO2VESchedule(SO2Schedule, core.Configurable):
     @property
     def reverse_t_schedule(self):
         return torch.linspace(1, 0, 11)
-
 
 
 
