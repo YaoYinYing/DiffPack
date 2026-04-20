@@ -17,6 +17,7 @@ class InferenceRequest:
     device: str
     fast: bool
     profile: bool
+    memory_mode: str = "quality"
     cache_root: str | None = None
     cache_read_only: bool = True
 

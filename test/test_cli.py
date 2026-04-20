@@ -28,6 +28,8 @@ def test_parse_args_success():
             "exclude",
             "--cache_root",
             "/tmp/diffpack_cache_test",
+            "--memory_mode",
+            "balanced",
         ]
     )
     assert args.repack_radius == 10
@@ -35,6 +37,7 @@ def test_parse_args_success():
     assert args.hetero_policy == "exclude"
     assert args.cache_read_only is True
     assert args.cache_root.endswith("/tmp/diffpack_cache_test")
+    assert args.memory_mode == "balanced"
 
 
 def test_run_diagnostics_outputs_json(capsys):
@@ -55,3 +58,5 @@ def test_run_diagnostics_outputs_json(capsys):
     assert pyg_preview["backend_mode"] == "native"
     assert "backend_dependency_probe" in payload
     assert "native" in payload["backend_dependency_probe"]
+    assert "mps_memory_probe" in payload
+    assert "memory_telemetry_fields" in payload

@@ -129,8 +129,16 @@ class TorsionalDiffusion(tasks.Task, core.Configurable):
 
         # Scaled by norm
         torsion_sigma = sigma[protein.residue2graph].unsqueeze(-1).expand(-1, self.NUM_CHI_ANGLES)  # [num_residue, 4]
-        score_norm_1pi = torch.tensor(self.schedule_1pi_periodic.score_norm(torsion_sigma), device=self.device)
-        score_norm_2pi = torch.tensor(self.schedule_2pi_periodic.score_norm(torsion_sigma), device=self.device)
+        score_norm_1pi = torch.tensor(
+            self.schedule_1pi_periodic.score_norm(torsion_sigma),
+            device=self.device,
+            dtype=pred.dtype,
+        )
+        score_norm_2pi = torch.tensor(
+            self.schedule_2pi_periodic.score_norm(torsion_sigma),
+            device=self.device,
+            dtype=pred.dtype,
+        )
         score_norm = torch.where(protein.chi_1pi_periodic_mask, score_norm_1pi, score_norm_2pi)
         pred_score = pred * score_norm.sqrt()
 

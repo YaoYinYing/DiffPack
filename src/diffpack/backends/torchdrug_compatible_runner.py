@@ -54,8 +54,7 @@ class TorchDrugCompatibleRunner:
             task.load_state_dict(model_dict, strict=False)
         if cfg.get("_override_device"):
             solver.device = cfg._override_device
-            if solver.device.type != "cpu":
-                solver.model = solver.model.to(solver.device)
+            solver.model = solver.model.to(solver.device)
         if core.Configurable is not None:
             logger.warning("#parameter: %d", sum(p.numel() for p in task.parameters() if p.requires_grad))
         return solver
@@ -145,6 +144,10 @@ class TorchDrugCompatibleRunner:
             "device": str(device),
             "elapsed_sec": elapsed,
             "profile_path": profile_path,
+            "memory_mode": request.memory_mode,
+            "mps_allocated_peak_bytes": None,
+            "mps_reserved_peak_bytes": None,
+            "memory_phase_peaks": {},
         }
         if isinstance(run_summary, dict):
             metadata.update(run_summary)

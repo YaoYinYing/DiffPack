@@ -13,6 +13,7 @@ import yaml
 from diffpack.backend_preflight import probe_backend_dependencies
 from diffpack.backends import InferenceRequest, get_backend_adapter
 from diffpack.device import device_diagnostics
+from diffpack.memory import mps_memory_probe
 from diffpack.util import get_default_config_path
 
 
@@ -45,6 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--diagnose", action="store_true", help="print runtime diagnostics and exit")
     parser.add_argument("--profile", action="store_true", help="write CPU profiler table to output directory")
     parser.add_argument("--fast", action="store_true", help="safe deterministic runtime optimizations")
+    parser.add_argument(
+        "--memory_mode",
+        choices=["quality", "balanced", "aggressive"],
+        default="quality",
+        help="memory optimization mode for native / pyg generation paths",
+    )
     parser.add_argument("--cache_root", default=None, help="cache root override (default: platformdirs DiffPackCache)")
     parser.add_argument(
         "--cache_read_only",
@@ -103,6 +110,13 @@ def run_diagnostics():
         "torchdrug": probe_backend_dependencies("torchdrug"),
         "pyg": probe_backend_dependencies("pyg"),
     }
+    diagnostics["mps_memory_probe"] = mps_memory_probe()
+    diagnostics["memory_telemetry_fields"] = [
+        "memory_mode",
+        "mps_allocated_peak_bytes",
+        "mps_reserved_peak_bytes",
+        "memory_phase_peaks",
+    ]
     print(json.dumps(diagnostics, indent=2, sort_keys=True))
 
 
@@ -152,6 +166,7 @@ def main(argv: list[str] | None = None):
         device=args.device,
         fast=args.fast,
         profile=args.profile,
+        memory_mode=args.memory_mode,
         cache_root=args.cache_root,
         cache_read_only=bool(args.cache_read_only),
     )

@@ -105,6 +105,22 @@ def cuda(obj, *args, **kwargs):
     raise TypeError("Can't transfer object type `%s`" % type(obj))
 
 
+def to(obj, device, *args, **kwargs):
+    """
+    Transfer any nested container of tensors to an arbitrary device.
+    """
+    if hasattr(obj, "to"):
+        return obj.to(device, *args, **kwargs)
+    elif isinstance(obj, (str, bytes)):
+        return obj
+    elif isinstance(obj, dict):
+        return type(obj)({k: to(v, device, *args, **kwargs) for k, v in obj.items()})
+    elif isinstance(obj, (list, tuple)):
+        return type(obj)(to(x, device, *args, **kwargs) for x in obj)
+
+    raise TypeError("Can't transfer object type `%s`" % type(obj))
+
+
 def detach(obj):
     """
     Detach tensors in any nested conatiner.

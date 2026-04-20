@@ -55,6 +55,7 @@ def test_native_metadata(monkeypatch, tmp_path):
         device="cpu",
         fast=False,
         profile=False,
+        memory_mode="quality",
     )
     result = adapter.run_inference(request)
     assert result["backend_requested"] == "native"

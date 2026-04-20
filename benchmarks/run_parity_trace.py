@@ -26,6 +26,8 @@ class StageDiff:
 
 
 def _as_numpy(x):
+    if x is None:
+        return np.zeros((0,), dtype=np.float32)
     if isinstance(x, torch.Tensor):
         return x.detach().cpu().numpy()
     return np.asarray(x)
@@ -55,6 +57,11 @@ def _build_graph_stage(task_module, protein) -> dict[str, Any]:
     edge_feature = None
     if hasattr(graph, "edge_feature") and graph.edge_feature is not None:
         edge_feature = _as_numpy(graph.edge_feature)
+    if edge_list.ndim == 2 and edge_list.shape[1] >= 3 and edge_list.shape[0] > 0:
+        order = np.lexsort((edge_list[:, 2], edge_list[:, 1], edge_list[:, 0]))
+        edge_list = edge_list[order]
+        if edge_feature is not None and edge_feature.shape[0] == order.shape[0]:
+            edge_feature = edge_feature[order]
     return {
         "edge_list": edge_list,
         "num_relation": int(getattr(graph, "num_relation", 0)),
@@ -97,10 +104,22 @@ def _generation_stage(task_module, protein, *, randomize: bool, seed: int) -> di
     schedule = task_module.schedule_1pi_periodic.reverse_t_schedule.to(work.device)
     num_step = max(int(schedule.numel()) - 1, 0)
     pred_scores: list[np.ndarray] = []
+    score_norms: list[np.ndarray] = []
+    step_masks_1pi: list[np.ndarray] = []
+    step_masks_2pi: list[np.ndarray] = []
+    step_t: list[np.ndarray] = []
+    step_dt: list[np.ndarray] = []
+    step_sigma: list[np.ndarray] = []
     chi_states: list[np.ndarray] = []
 
     for chi_id in range(4):
         per_chi_pred = []
+        per_chi_norm = []
+        per_chi_mask_1pi = []
+        per_chi_mask_2pi = []
+        per_chi_t = []
+        per_chi_dt = []
+        per_chi_sigma = []
         per_chi_chis = [_as_numpy(rotamer.get_chis(work, work.node_position))]
         for j in range(num_step):
             t = schedule[j]
@@ -108,28 +127,46 @@ def _generation_stage(task_module, protein, *, randomize: bool, seed: int) -> di
             chis = rotamer.get_chis(work, work.node_position)
             sigma = task_module.schedule_1pi_periodic.t_to_sigma(t).repeat(work.batch_size)
             chi_protein = rotamer.remove_by_chi(work, chi_id)
-            pred_score, _ = task_module.predict({"graph": chi_protein, "sigma": sigma, "chi_id": chi_id})
+            pred_score, score_norm = task_module.predict({"graph": chi_protein, "sigma": sigma, "chi_id": chi_id})
             chi_1 = chi_protein.chi_1pi_periodic_mask
             chi_2 = chi_protein.chi_2pi_periodic_mask
             if repack_chi_mask is not None:
                 chi_1 = chi_1 & repack_chi_mask
                 chi_2 = chi_2 & repack_chi_mask
+            per_chi_t.append(float(t.item()))
+            per_chi_dt.append(float(dt.item()))
+            per_chi_sigma.append(_as_numpy(sigma))
+            per_chi_norm.append(_as_numpy(score_norm))
+            per_chi_mask_1pi.append(_as_numpy(chi_1))
+            per_chi_mask_2pi.append(_as_numpy(chi_2))
             chis = task_module.schedule_1pi_periodic.step(chis, pred_score, t, dt, chi_1)
             chis = task_module.schedule_2pi_periodic.step(chis, pred_score, t, dt, chi_2)
             work = rotamer.set_chis(work, chis)
             per_chi_pred.append(_as_numpy(pred_score))
             per_chi_chis.append(_as_numpy(chis))
         pred_scores.append(np.stack(per_chi_pred, axis=0) if per_chi_pred else np.zeros((0, work.num_residue, 4), dtype=np.float32))
+        score_norms.append(np.stack(per_chi_norm, axis=0) if per_chi_norm else np.zeros((0, work.num_residue, 4), dtype=np.float32))
+        step_masks_1pi.append(np.stack(per_chi_mask_1pi, axis=0) if per_chi_mask_1pi else np.zeros((0, work.num_residue, 4), dtype=bool))
+        step_masks_2pi.append(np.stack(per_chi_mask_2pi, axis=0) if per_chi_mask_2pi else np.zeros((0, work.num_residue, 4), dtype=bool))
+        step_t.append(np.asarray(per_chi_t, dtype=np.float32))
+        step_dt.append(np.asarray(per_chi_dt, dtype=np.float32))
+        step_sigma.append(np.stack(per_chi_sigma, axis=0) if per_chi_sigma else np.zeros((0, work.batch_size), dtype=np.float32))
         chi_states.append(np.stack(per_chi_chis, axis=0))
 
     return {
         "pred_scores": np.stack(pred_scores, axis=0),
+        "score_norms": np.stack(score_norms, axis=0),
+        "mask_1pi": np.stack(step_masks_1pi, axis=0),
+        "mask_2pi": np.stack(step_masks_2pi, axis=0),
+        "step_t": np.stack(step_t, axis=0),
+        "step_dt": np.stack(step_dt, axis=0),
+        "step_sigma": np.stack(step_sigma, axis=0),
         "chi_states": np.stack(chi_states, axis=0),
         "final_node_position": _as_numpy(work.node_position),
     }
 
 
-def _summarize_delta(lhs, rhs, stage: str) -> StageDiff:
+def _summarize_delta(lhs, rhs, stage: str, *, equal_nan: bool = False) -> StageDiff:
     a = _as_numpy(lhs)
     b = _as_numpy(rhs)
     if a.shape != b.shape:
@@ -141,6 +178,10 @@ def _summarize_delta(lhs, rhs, stage: str) -> StageDiff:
         order_b = np.lexsort((b[:, 2], b[:, 1], b[:, 0]))
         a = a[order_a]
         b = b[order_b]
+    if equal_nan:
+        both_nan = np.isnan(a) & np.isnan(b)
+        a = np.where(both_nan, 0.0, a)
+        b = np.where(both_nan, 0.0, b)
     d = np.abs(a.astype(np.float64) - b.astype(np.float64))
     if not np.isfinite(d).all():
         return StageDiff(stage=stage, max_abs_delta=float("inf"), mean_abs_delta=float("inf"), same_shape=True, compared_values=int(d.size))
@@ -211,10 +252,12 @@ def parse_args():
     parser.add_argument("--center_residues", nargs="*", default=[])
     parser.add_argument("--repack_radius", type=float, default=None)
     parser.add_argument("--hetero_policy", choices=["exclude", "context_only", "error"], default="exclude")
+    parser.add_argument("--cache_root", default=None, help="cache root override for schedule tables")
     parser.add_argument("--backend", choices=["native", "pyg"], default="pyg")
     parser.add_argument("--reference_backend", choices=["torchdrug"], default="torchdrug")
     parser.add_argument("--max_abs_tolerance", type=float, default=1e-5)
     parser.add_argument("--mean_tolerance", type=float, default=1e-6)
+    parser.add_argument("--equal_nan", action="store_true", help="treat matching NaN values as equal in diffs")
     return parser.parse_args()
 
 
@@ -236,6 +279,15 @@ def main():
     cfg.test_set.center_residues = args.center_residues
     cfg.test_set.repack_radius = args.repack_radius
     cfg.test_set.hetero_policy = args.hetero_policy
+    if args.cache_root:
+        cache_root = os.path.realpath(args.cache_root)
+        cfg.cache = cfg.get("cache", {})
+        cfg.cache["root"] = cache_root
+        cfg.cache["mode"] = "read_only"
+        for skey in ("schedule_1pi_periodic", "schedule_2pi_periodic"):
+            if skey in cfg.task:
+                cfg.task[skey]["cache_folder"] = cache_root
+                cfg.task[skey]["cache_read_only"] = True
 
     td_task, td_protein = _load_torchdrug_task_and_protein(cfg, device)
     run_task, run_protein = _load_framework_task_and_protein(cfg, device, args.backend)
@@ -257,11 +309,18 @@ def main():
         _summarize_delta(trace_td["dataset"]["atom2residue"], trace_run["dataset"]["atom2residue"], "dataset.atom2residue"),
         _summarize_delta(trace_td["dataset"]["node_feature"], trace_run["dataset"]["node_feature"], "dataset.node_feature"),
         _summarize_delta(trace_td["dataset"]["chi_mask"], trace_run["dataset"]["chi_mask"], "dataset.chi_mask"),
-        _summarize_delta(trace_td["graph"]["edge_list"], trace_run["graph"]["edge_list"], "graph.edge_list"),
-        _summarize_delta(trace_td["schedule"]["sigma"], trace_run["schedule"]["sigma"], "schedule.sigma"),
-        _summarize_delta(trace_td["generation"]["pred_scores"], trace_run["generation"]["pred_scores"], "generation.pred_scores"),
-        _summarize_delta(trace_td["generation"]["chi_states"], trace_run["generation"]["chi_states"], "generation.chi_states"),
-        _summarize_delta(trace_td["generation"]["final_node_position"], trace_run["generation"]["final_node_position"], "generation.final_node_position"),
+        _summarize_delta(trace_td["graph"]["edge_list"], trace_run["graph"]["edge_list"], "graph.edge_list", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["graph"]["edge_feature"], trace_run["graph"]["edge_feature"], "graph.edge_feature", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["schedule"]["sigma"], trace_run["schedule"]["sigma"], "schedule.sigma", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["generation"]["step_t"], trace_run["generation"]["step_t"], "generation.step_t", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["generation"]["step_dt"], trace_run["generation"]["step_dt"], "generation.step_dt", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["generation"]["step_sigma"], trace_run["generation"]["step_sigma"], "generation.step_sigma", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["generation"]["mask_1pi"], trace_run["generation"]["mask_1pi"], "generation.mask_1pi", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["generation"]["mask_2pi"], trace_run["generation"]["mask_2pi"], "generation.mask_2pi", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["generation"]["score_norms"], trace_run["generation"]["score_norms"], "generation.score_norms", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["generation"]["pred_scores"], trace_run["generation"]["pred_scores"], "generation.pred_scores", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["generation"]["chi_states"], trace_run["generation"]["chi_states"], "generation.chi_states", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["generation"]["final_node_position"], trace_run["generation"]["final_node_position"], "generation.final_node_position", equal_nan=args.equal_nan),
     ]
     first_div = _first_divergence(diffs, atol=args.max_abs_tolerance, mtol=args.mean_tolerance)
     parity_status = "pass" if first_div is None else "fail"
@@ -276,6 +335,7 @@ def main():
         "metric_delta_vs_reference": {
             "max_abs_tolerance": args.max_abs_tolerance,
             "mean_tolerance": args.mean_tolerance,
+            "equal_nan": args.equal_nan,
         },
         "stage_diffs": [asdict(d) for d in diffs],
     }
@@ -285,7 +345,14 @@ def main():
         "dataset_node_feature": trace_td["dataset"]["node_feature"],
         "dataset_chi_mask": trace_td["dataset"]["chi_mask"],
         "graph_edge_list": trace_td["graph"]["edge_list"],
+        "graph_edge_feature": trace_td["graph"]["edge_feature"],
         "schedule_sigma": trace_td["schedule"]["sigma"],
+        "generation_step_t": trace_td["generation"]["step_t"],
+        "generation_step_dt": trace_td["generation"]["step_dt"],
+        "generation_step_sigma": trace_td["generation"]["step_sigma"],
+        "generation_mask_1pi": trace_td["generation"]["mask_1pi"],
+        "generation_mask_2pi": trace_td["generation"]["mask_2pi"],
+        "generation_score_norms": trace_td["generation"]["score_norms"],
         "generation_pred_scores": trace_td["generation"]["pred_scores"],
         "generation_chi_states": trace_td["generation"]["chi_states"],
         "generation_final_node_position": trace_td["generation"]["final_node_position"],
@@ -295,7 +362,14 @@ def main():
         "dataset_node_feature": trace_run["dataset"]["node_feature"],
         "dataset_chi_mask": trace_run["dataset"]["chi_mask"],
         "graph_edge_list": trace_run["graph"]["edge_list"],
+        "graph_edge_feature": trace_run["graph"]["edge_feature"],
         "schedule_sigma": trace_run["schedule"]["sigma"],
+        "generation_step_t": trace_run["generation"]["step_t"],
+        "generation_step_dt": trace_run["generation"]["step_dt"],
+        "generation_step_sigma": trace_run["generation"]["step_sigma"],
+        "generation_mask_1pi": trace_run["generation"]["mask_1pi"],
+        "generation_mask_2pi": trace_run["generation"]["mask_2pi"],
+        "generation_score_norms": trace_run["generation"]["score_norms"],
         "generation_pred_scores": trace_run["generation"]["pred_scores"],
         "generation_chi_states": trace_run["generation"]["chi_states"],
         "generation_final_node_position": trace_run["generation"]["final_node_position"],

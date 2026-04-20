@@ -25,6 +25,7 @@ def parse_args():
     parser.add_argument("--center_residues", nargs="*", default=[])
     parser.add_argument("--repack_radius", type=float, default=None)
     parser.add_argument("--hetero_policy", choices=["exclude", "context_only", "error"], default="exclude")
+    parser.add_argument("--cache_root", default=None, help="cache root override (read-only mode)")
     parser.add_argument("--reference_backend", choices=["native", "torchdrug", "pyg"], default=None)
     parser.add_argument("--parity_max_abs_tolerance", type=float, default=10.0)
     parser.add_argument("--parity_mean_tolerance", type=float, default=2.0)
@@ -64,6 +65,7 @@ def main():
         device=args.device,
         fast=True,
         profile=False,
+        cache_root=args.cache_root,
     )
     adapter = get_backend_adapter(args.backend)
     t0 = time.perf_counter()
@@ -103,6 +105,7 @@ def main():
             device=request.device,
             fast=request.fast,
             profile=request.profile,
+            cache_root=request.cache_root,
         )
         ref_result = get_backend_adapter(args.reference_backend).run_inference(ref_request)
         ref_files = ref_result.get("output_files", [])

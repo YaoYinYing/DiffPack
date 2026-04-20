@@ -15,7 +15,9 @@ from torch import nn
 from torch.nn import functional as F
 
 from diffpack import repack, rotamer, util
+from diffpack.clash_guard import mitigate_severe_clashes
 from diffpack.device import choose_torch_device, move_to_device
+from diffpack.memory import MemoryTracker, release_device_cache
 from diffpack.schedule_cache import (
     load_schedule_tables_readonly,
     resolve_cache_root,
@@ -74,7 +76,7 @@ def _pairwise_edges(position: torch.Tensor, batch: torch.Tensor) -> tuple[torch.
 
 
 def _knn_graph(position: torch.Tensor, k: int, batch: torch.Tensor) -> torch.Tensor:
-    if _knn_graph_impl is not None:
+    if _knn_graph_impl is not None and position.device.type in {"cpu", "cuda"}:
         return _knn_graph_impl(position, k=k, batch=batch, loop=False)
 
     src, dst = _pairwise_edges(position, batch)
@@ -99,7 +101,7 @@ def _knn_graph(position: torch.Tensor, k: int, batch: torch.Tensor) -> torch.Ten
 
 
 def _radius_graph(position: torch.Tensor, radius: float, batch: torch.Tensor, max_num_neighbors: int) -> torch.Tensor:
-    if _radius_graph_impl is not None:
+    if _radius_graph_impl is not None and position.device.type in {"cpu", "cuda"}:
         return _radius_graph_impl(
             position,
             r=radius,
@@ -281,6 +283,7 @@ class PygGraphConstruction(nn.Module):
         self.edge_feature = edge_feature
 
     def _edge_gearnet(self, protein, edge_list: torch.Tensor, num_relation: int):
+        num_residue_type = len(rotamer.residue_list)
         node_in, node_out, relation = edge_list.t()
         residue_in = protein.atom2residue[node_in]
         residue_out = protein.atom2residue[node_out]
@@ -290,8 +293,8 @@ class PygGraphConstruction(nn.Module):
         spatial_dist = (protein.node_position[node_in] - protein.node_position[node_out]).norm(dim=-1)
         return torch.cat(
             [
-                F.one_hot(in_residue_type, num_classes=21).to(torch.float32),
-                F.one_hot(out_residue_type, num_classes=21).to(torch.float32),
+                F.one_hot(in_residue_type, num_classes=num_residue_type).to(torch.float32),
+                F.one_hot(out_residue_type, num_classes=num_residue_type).to(torch.float32),
                 F.one_hot(relation, num_classes=num_relation).to(torch.float32),
                 F.one_hot(sequential_dist, num_classes=self.max_seq_dist + 1).to(torch.float32),
                 spatial_dist.unsqueeze(-1),
@@ -563,12 +566,14 @@ class PygGearNet(nn.Module):
                     update = conv.activation(update)
                 hidden = hidden + update
                 edge_input = edge_hidden
+                del weighted_edge_hidden, update
             if self.use_post_batch_norm:
                 hidden = self.batch_norms[i](hidden)
             hiddens.append(hidden)
             layer_input = hidden
 
         node_feature = torch.cat(hiddens, dim=-1) if self.concat_hidden else hiddens[-1]
+        del hiddens
         if graph.batch_size == 1:
             graph_feature = node_feature.sum(dim=0, keepdim=True) if self.readout == "sum" else node_feature.mean(dim=0, keepdim=True)
         else:
@@ -577,6 +582,8 @@ class PygGearNet(nn.Module):
                 graph_feature = _scatter_add(node_feature, graph_ids, graph.batch_size)
             else:
                 graph_feature = _scatter_mean(node_feature, graph_ids, graph.batch_size)
+        if self.num_angle_bin:
+            del line_graph, edge_input
         return {"graph_feature": graph_feature, "node_feature": node_feature}
 
 
@@ -616,8 +623,12 @@ class PygSigmaEmbeddingLayer(nn.Module):
     def _embed_sigma(self, sigma: torch.Tensor):
         if sigma.ndim != 1:
             sigma = sigma.flatten()
+        sigma = sigma * 10000.0
         half_dim = self.sigma_dim // 2
-        scale = torch.exp(torch.arange(half_dim, dtype=torch.float32, device=sigma.device) * -(np.log(10000) / max(half_dim - 1, 1)))
+        scale = torch.exp(
+            torch.arange(half_dim, dtype=torch.float32, device=sigma.device)
+            * -(np.log(10000) / max(half_dim - 1, 1))
+        )
         emb = sigma.float().unsqueeze(-1) * scale.unsqueeze(0)
         emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
         if self.sigma_dim % 2 == 1:
@@ -759,7 +770,7 @@ class PygSO2VESchedule(PygSO2Schedule):
         if self.mode == "ode":
             x_prev = x + 0.5 * g ** 2 * dt * (x_score * annealed_weight)
         elif self.mode == "sde":
-            noise = torch.randn_like(x_score)
+            noise = torch.normal(mean=0, std=1, size=x_score.shape, device=x_score.device)
             x_prev = x + g ** 2 * dt * (x_score * annealed_weight) + g * torch.sqrt(dt) * noise
         else:
             raise NotImplementedError(f"Unknown schedule mode `{self.mode}`")
@@ -870,8 +881,9 @@ class PygProtein:
             if rid not in seen:
                 seen.add(rid)
                 kept_res_old.append(rid)
+        kept_res_tensor = torch.tensor(kept_res_old, device=self.device)
         old_to_new_res = torch.full((self.num_residue,), -1, dtype=torch.long, device=self.device)
-        old_to_new_res[torch.tensor(kept_res_old, device=self.device)] = torch.arange(len(kept_res_old), device=self.device)
+        old_to_new_res[kept_res_tensor] = torch.arange(len(kept_res_old), device=self.device)
         new_atom2res = old_to_new_res[new_atom2res_old]
         edge_keep = keep_atom_mask[self.edge_list[:, 0]] & keep_atom_mask[self.edge_list[:, 1]]
         new_edge = self.edge_list[edge_keep].clone()
@@ -882,15 +894,24 @@ class PygProtein:
             node_position=self.node_position[keep_atom_mask],
             atom_name=self.atom_name[keep_atom_mask],
             atom2residue=new_atom2res,
-            residue_type=self.residue_type[torch.tensor(kept_res_old, device=self.device)],
+            residue_type=self.residue_type[kept_res_tensor],
             residue_chain=[self.residue_chain[i] for i in kept_res_old],
             residue_number=[self.residue_number[i] for i in kept_res_old],
             edge_list=new_edge,
             num_relation=self.num_relation,
             node_feature=self.node_feature[keep_atom_mask],
         )
+        # Preserve residue-level masks from the parent graph. This matches the torchdrug
+        # subgraph behavior used by rotamer.remove_by_chi(), where pre-masked chi tensors
+        # must survive atom pruning.
+        if hasattr(self, "chi_mask"):
+            out.chi_mask = self.chi_mask[kept_res_tensor].clone()
+        if hasattr(self, "chi_1pi_periodic_mask"):
+            out.chi_1pi_periodic_mask = self.chi_1pi_periodic_mask[kept_res_tensor].clone()
+        if hasattr(self, "chi_2pi_periodic_mask"):
+            out.chi_2pi_periodic_mask = self.chi_2pi_periodic_mask[kept_res_tensor].clone()
         if hasattr(self, "repack_residue_mask"):
-            out.repack_residue_mask = self.repack_residue_mask[torch.tensor(kept_res_old, device=self.device)]
+            out.repack_residue_mask = self.repack_residue_mask[kept_res_tensor].clone()
         return out
 
     def to_pdb(self, path: str):
@@ -1122,6 +1143,10 @@ class PygTorsionalDiffusion(nn.Module):
         self.schedule_2pi_periodic = schedule_2pi_periodic
         self.graph_construction_model = graph_construction_model
         self.train_chi_id = train_chi_id
+        self.memory_mode = "quality"
+
+    def set_memory_mode(self, mode: str):
+        self.memory_mode = mode
 
     def predict(self, batch):
         protein = batch["graph"]
@@ -1137,8 +1162,16 @@ class PygTorsionalDiffusion(nn.Module):
         residue_feature = _scatter_mean(node_feature, graph.atom2residue, graph.num_residue)
         pred = self.torsion_mlp_list[chi_id](residue_feature)
         torsion_sigma = sigma[graph.residue2graph].unsqueeze(-1).expand(-1, self.NUM_CHI_ANGLES)
-        score_norm_1pi = torch.tensor(self.schedule_1pi_periodic.score_norm(torsion_sigma), device=graph.device)
-        score_norm_2pi = torch.tensor(self.schedule_2pi_periodic.score_norm(torsion_sigma), device=graph.device)
+        score_norm_1pi = torch.tensor(
+            self.schedule_1pi_periodic.score_norm(torsion_sigma),
+            device=graph.device,
+            dtype=pred.dtype,
+        )
+        score_norm_2pi = torch.tensor(
+            self.schedule_2pi_periodic.score_norm(torsion_sigma),
+            device=graph.device,
+            dtype=pred.dtype,
+        )
         score_norm = torch.where(graph.chi_1pi_periodic_mask, score_norm_1pi, score_norm_2pi)
         pred_score = pred * score_norm.sqrt()
         pred_score = pred_score * graph.chi_mask.to(pred_score.dtype)
@@ -1172,6 +1205,8 @@ class PygTorsionalDiffusion(nn.Module):
                 chis = self.schedule_1pi_periodic.step(chis, pred_score, t, dt, chi_1)
                 chis = self.schedule_2pi_periodic.step(chis, pred_score, t, dt, chi_2)
                 protein = rotamer.set_chis(protein, chis)
+                del chi_protein, pred_score, chi_1, chi_2, sigma, chis
+            release_device_cache(protein.device, aggressive=self.memory_mode == "aggressive")
         return {"graph": protein}
 
     def get_metric(self, pred_protein, true_protein, metric):
@@ -1224,16 +1259,25 @@ class PygConfidencePrediction(PygTorsionalDiffusion):
         input_protein = protein.clone()
         best_protein = input_protein.clone()
         best_rmsd = torch.zeros(protein.num_residue, device=protein.device) + 1e6
-        for _ in range(self.num_sample):
-            sampled = super().generate({"graph": input_protein.clone()}, randomize=randomize)
-            protein = sampled["graph"]
-            rmsd = self.predict_rmsd(sampled)
+        num_sample = self.num_sample
+        if self.memory_mode == "balanced":
+            num_sample = min(num_sample, 4)
+        elif self.memory_mode == "aggressive":
+            num_sample = min(num_sample, 2)
+        working_protein = input_protein.clone()
+        for _ in range(num_sample):
+            working_protein.node_position.copy_(input_protein.node_position)
+            protein = super().generate({"graph": working_protein}, randomize=randomize)["graph"]
+            rmsd = self.predict_rmsd({"graph": protein})
             update_mask = rmsd < best_rmsd
             if repack_residue_mask is not None:
                 update_mask = update_mask & repack_residue_mask
             atom_update_mask = update_mask[protein.atom2residue]
             best_protein.node_position[atom_update_mask] = protein.node_position[atom_update_mask]
             best_rmsd[update_mask] = rmsd[update_mask]
+            working_protein = protein
+            del rmsd, update_mask, atom_update_mask
+            release_device_cache(protein.device, aggressive=self.memory_mode != "quality")
         return {"graph": best_protein, "rmsd": best_rmsd}
 
 
@@ -1417,6 +1461,7 @@ class NativeRunner:
         device = choose_torch_device(request.device)
         if request.fast and getattr(cfg.task, "class", "") == "ConfidencePrediction" and "num_sample" in cfg.task:
             cfg.task.num_sample = max(1, min(int(cfg.task.num_sample), 2))
+        memory_tracker = MemoryTracker(device=device, mode=request.memory_mode)
 
         self._set_seed(request.seed)
         logger = util.get_root_logger(file=False)
@@ -1426,6 +1471,7 @@ class NativeRunner:
         logger.warning("Config file: %s", request.config)
         logger.warning(pprint.pformat(cfg))
         logger.warning("Output dir: %s", request.output_dir)
+        logger.warning("Memory mode: %s", request.memory_mode)
         logger.warning("Cache root: %s", cfg.cache["root"])
         logger.warning("Cache mode: %s", cfg.cache["mode"])
         logger.warning("Cache preflight validation: start")
@@ -1439,14 +1485,19 @@ class NativeRunner:
         logger.warning("Cache preflight validation: ok")
 
         translator = PygConfigTranslator(cfg)
+        memory_tracker.sample("cache_validation")
         task_module = translator.build_task()
+        if hasattr(task_module, "set_memory_mode"):
+            task_module.set_memory_mode(request.memory_mode)
         task_module = task_module.to(device)
+        memory_tracker.sample("task_init")
 
         ckpt_info = None
         if "model_checkpoint" in cfg and cfg.model_checkpoint:
             ckpt_info = self._load_model_checkpoint(task_module, cfg.model_checkpoint)
 
         test_set = translator.build_dataset()
+        memory_tracker.sample("dataset_load")
 
         profile_ctx = torch.profiler.profile(
             activities=[torch.profiler.ProfilerActivity.CPU],
@@ -1457,14 +1508,21 @@ class NativeRunner:
 
         output_files = []
         metric_summary = {}
+        enable_clash_guard = os.environ.get("DIFFPACK_ENABLE_CLASH_GUARD", "").strip() == "1"
+        clash_guard_summary = {"clash_guard_applied": False, "enabled": enable_clash_guard}
         start = time.perf_counter()
         with torch.no_grad(), profile_ctx as prof:
             for i in range(len(test_set)):
                 item = test_set.get_item(i)
                 batch = move_to_device(item, device)
                 true_protein = batch["graph"].clone()
+                memory_tracker.sample("graph_build")
                 pred = task_module.generate(batch)["graph"]
+                memory_tracker.sample("generation_loop")
+                if enable_clash_guard:
+                    pred, clash_guard_summary = mitigate_severe_clashes(pred, true_protein, threshold=1.0, max_iter=2)
                 metric = task_module.get_metric(pred, true_protein, {})
+                memory_tracker.sample("confidence_loop")
                 metric_summary = {
                     "atom_rmsd_per_residue": float(metric["atom_rmsd_per_residue"].mean().item()),
                     "chi_0_mae_deg": float(metric["chi_0_ae_deg"].mean().item()),
@@ -1476,6 +1534,7 @@ class NativeRunner:
                 output_path = os.path.join(request.output_dir, pdb_file)
                 pred.cpu().to_pdb(output_path)
                 output_files.append(output_path)
+                memory_tracker.sample("write_output")
         elapsed = time.perf_counter() - start
 
         profile_path = None
@@ -1501,7 +1560,9 @@ class NativeRunner:
             "cache_validation_status": "pass",
             "cache_validation_errors": [],
             "cache_keys": cache_validation["keys"],
+            "clash_guard": clash_guard_summary,
         }
+        metadata.update(memory_tracker.metadata())
         Path(request.output_dir).mkdir(parents=True, exist_ok=True)
         return metadata
 

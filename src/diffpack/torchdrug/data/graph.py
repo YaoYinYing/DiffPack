@@ -968,8 +968,19 @@ class Graph(core._MetaContainer):
         device = torch.device(device)
         if device.type == "cpu":
             return self.cpu(*args, **kwargs)
-        else:
+        if device.type == "cuda":
             return self.cuda(device, *args, **kwargs)
+        edge_list = self.edge_list.to(device, *args, **kwargs)
+        if edge_list is self.edge_list:
+            return self
+        return type(self)(
+            edge_list,
+            edge_weight=self.edge_weight.to(device, *args, **kwargs),
+            num_node=self.num_node,
+            num_relation=self.num_relation,
+            meta_dict=self.meta_dict,
+            **utils.to(self.data_dict, device, *args, **kwargs),
+        )
 
     def __repr__(self):
         fields = ["num_node=%d" % self.num_node, "num_edge=%d" % self.num_edge]
@@ -1752,6 +1763,26 @@ class PackedGraph(Graph):
             return type(self)(edge_list, edge_weight=self.edge_weight,
                               num_nodes=self.num_nodes, num_edges=self.num_edges, num_relation=self.num_relation,
                               offsets=self._offsets, meta_dict=self.meta_dict, **utils.cpu(self.data_dict))
+
+    def to(self, device, *args, **kwargs):
+        device = torch.device(device)
+        if device.type == "cpu":
+            return self.cpu(*args, **kwargs)
+        if device.type == "cuda":
+            return self.cuda(device, *args, **kwargs)
+        edge_list = self.edge_list.to(device, *args, **kwargs)
+        if edge_list is self.edge_list:
+            return self
+        return type(self)(
+            edge_list,
+            edge_weight=self.edge_weight.to(device, *args, **kwargs),
+            num_nodes=self.num_nodes,
+            num_edges=self.num_edges,
+            num_relation=self.num_relation,
+            offsets=self._offsets,
+            meta_dict=self.meta_dict,
+            **utils.to(self.data_dict, device, *args, **kwargs),
+        )
 
     def __repr__(self):
         fields = ["batch_size=%d" % self.batch_size,

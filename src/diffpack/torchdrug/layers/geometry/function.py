@@ -7,6 +7,77 @@ from diffpack.torchdrug.layers import functional
 from diffpack.torchdrug.core import Registry as R
 
 
+def _pairwise_edges(position, batch):
+    src_list = []
+    dst_list = []
+    for graph_id in batch.unique(sorted=True):
+        nodes = torch.nonzero(batch == graph_id, as_tuple=False).flatten()
+        if nodes.numel() == 0:
+            continue
+        src = nodes.repeat_interleave(nodes.numel())
+        dst = nodes.repeat(nodes.numel())
+        mask = src != dst
+        src_list.append(src[mask])
+        dst_list.append(dst[mask])
+    if not src_list:
+        empty = torch.zeros((0,), dtype=torch.long, device=position.device)
+        return empty, empty
+    return torch.cat(src_list), torch.cat(dst_list)
+
+
+def _safe_knn_graph(position, k, batch):
+    if position.device.type in {"cpu", "cuda"}:
+        return knn_graph(position, k=k, batch=batch, loop=False)
+    src, dst = _pairwise_edges(position, batch)
+    if src.numel() == 0:
+        return torch.zeros((2, 0), dtype=torch.long, device=position.device)
+    dist = (position[src] - position[dst]).norm(dim=-1)
+    edge_src = []
+    edge_dst = []
+    for node in range(position.shape[0]):
+        mask = dst == node
+        if mask.sum() == 0:
+            continue
+        local_src = src[mask]
+        local_dist = dist[mask]
+        topk = min(k, local_src.numel())
+        idx = torch.argsort(local_dist)[:topk]
+        edge_src.append(local_src[idx])
+        edge_dst.append(torch.full((topk,), node, dtype=torch.long, device=position.device))
+    if not edge_src:
+        return torch.zeros((2, 0), dtype=torch.long, device=position.device)
+    return torch.stack([torch.cat(edge_src), torch.cat(edge_dst)], dim=0)
+
+
+def _safe_radius_graph(position, radius, batch, max_num_neighbors):
+    if position.device.type in {"cpu", "cuda"}:
+        return radius_graph(position, r=radius, batch=batch, max_num_neighbors=max_num_neighbors)
+    src, dst = _pairwise_edges(position, batch)
+    if src.numel() == 0:
+        return torch.zeros((2, 0), dtype=torch.long, device=position.device)
+    dist = (position[src] - position[dst]).norm(dim=-1)
+    mask = dist <= radius
+    src = src[mask]
+    dst = dst[mask]
+    dist = dist[mask]
+    edge_src = []
+    edge_dst = []
+    for node in range(position.shape[0]):
+        local_mask = dst == node
+        if local_mask.sum() == 0:
+            continue
+        local_src = src[local_mask]
+        local_dist = dist[local_mask]
+        if local_src.numel() > max_num_neighbors:
+            idx = torch.argsort(local_dist)[:max_num_neighbors]
+            local_src = local_src[idx]
+        edge_src.append(local_src)
+        edge_dst.append(torch.full_like(local_src, node))
+    if not edge_src:
+        return torch.zeros((2, 0), dtype=torch.long, device=position.device)
+    return torch.stack([torch.cat(edge_src), torch.cat(edge_dst)], dim=0)
+
+
 @R.register("layers.geometry.BondEdge")
 class BondEdge(nn.Module, core.Configurable):
     """
@@ -54,7 +125,7 @@ class KNNEdge(nn.Module, core.Configurable):
         Returns:
             (Tensor, int): edge list of shape :math:`(|E|, 3)`, number of relations
         """
-        edge_list = knn_graph(graph.node_position, k=self.k, batch=graph.node2graph).t()
+        edge_list = _safe_knn_graph(graph.node_position, k=self.k, batch=graph.node2graph).t()
         relation = torch.zeros(len(edge_list), 1, dtype=torch.long, device=graph.device)
         edge_list = torch.cat([edge_list, relation], dim=-1)
 
@@ -104,7 +175,12 @@ class SpatialEdge(nn.Module, core.Configurable):
         Returns:
             (Tensor, int): edge list of shape :math:`(|E|, 3)`, number of relations
         """
-        edge_list = radius_graph(graph.node_position, r=self.radius, batch=graph.node2graph, max_num_neighbors=self.max_num_neighbors).t()
+        edge_list = _safe_radius_graph(
+            graph.node_position,
+            radius=self.radius,
+            batch=graph.node2graph,
+            max_num_neighbors=self.max_num_neighbors,
+        ).t()
         relation = torch.zeros(len(edge_list), 1, dtype=torch.long, device=graph.device)
         edge_list = torch.cat([edge_list, relation], dim=-1)
 
