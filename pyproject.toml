@@ -27,6 +27,7 @@ classifiers = [
 dependencies = [
   "torch>=2.3.0",
   "numpy>=1.26.4",
+  "rdkit>=2024.3.5",
   "pyyaml>=6.0",
   "platformdirs>=4.2.0",
   "easydict>=1.10",
@@ -40,7 +41,6 @@ torchdrug = [
   "torch-scatter>=2.1.2",
   "torch-cluster>=1.6.3",
   "torch-geometric>=2.6.0",
-  "rdkit>=2024.3.5",
   "lmdb",
   "fair-esm",
   "transformers>=4.18.0",
