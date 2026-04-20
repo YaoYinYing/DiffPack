@@ -11,8 +11,6 @@ import numpy as np
 import torch
 
 from diffpack import rotamer, util
-from diffpack.backends.native_runtime import NativeConfigTranslator
-from diffpack.backends.pyg_runtime import PygConfigTranslator
 from diffpack.device import choose_torch_device, move_to_device
 
 
@@ -226,8 +224,12 @@ def _load_torchdrug_task_and_protein(cfg, device: torch.device):
 
 def _load_framework_task_and_protein(cfg, device: torch.device, backend: str):
     if backend == "pyg":
+        from diffpack.backends.pyg_runtime import PygConfigTranslator
+
         translator = PygConfigTranslator(cfg)
     elif backend == "native":
+        from diffpack.backends.native_runtime import NativeConfigTranslator
+
         translator = NativeConfigTranslator(cfg)
     else:
         raise ValueError(f"Unsupported translated backend `{backend}` for parity trace")
@@ -247,7 +249,7 @@ def parse_args():
     parser.add_argument("--config", required=True, help="inference config yaml")
     parser.add_argument("--pdb_file", required=True, help="single pdb path (e.g., 1ubq.pdb)")
     parser.add_argument("--output_dir", default="benchmark_output/parity_trace", help="output directory")
-    parser.add_argument("--device", choices=["cpu", "cuda", "mps"], default="cpu")
+    parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
     parser.add_argument("--seed", type=int, default=2023)
     parser.add_argument("--center_residues", nargs="*", default=[])
     parser.add_argument("--repack_radius", type=float, default=None)

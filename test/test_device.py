@@ -2,7 +2,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from diffpack.device import move_to_device
+from diffpack.device import choose_torch_device, move_to_device
 
 
 def test_move_to_device_tensor_cpu():
@@ -16,3 +16,8 @@ def test_move_to_device_nested():
     moved = move_to_device(batch, torch.device("cpu"))
     assert moved["x"].device.type == "cpu"
     assert moved["y"][0].device.type == "cpu"
+
+
+def test_choose_torch_device_rejects_mps():
+    with pytest.raises(RuntimeError, match="MPS is not supported"):
+        choose_torch_device("mps")

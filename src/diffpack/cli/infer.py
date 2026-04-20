@@ -13,7 +13,7 @@ import yaml
 from diffpack.backend_preflight import probe_backend_dependencies
 from diffpack.backends import InferenceRequest, get_backend_adapter
 from diffpack.device import device_diagnostics
-from diffpack.memory import mps_memory_probe
+from diffpack.memory import cuda_memory_probe
 from diffpack.util import get_default_config_path
 
 
@@ -42,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="how to handle HETATM / non-canonical residues during packing",
     )
     parser.add_argument("--backend", choices=["native", "torchdrug", "pyg"], default=None)
-    parser.add_argument("--device", choices=["cpu", "cuda", "mps"], default="cpu")
+    parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
     parser.add_argument("--diagnose", action="store_true", help="print runtime diagnostics and exit")
     parser.add_argument("--profile", action="store_true", help="write CPU profiler table to output directory")
     parser.add_argument("--fast", action="store_true", help="safe deterministic runtime optimizations")
@@ -110,11 +110,11 @@ def run_diagnostics():
         "torchdrug": probe_backend_dependencies("torchdrug"),
         "pyg": probe_backend_dependencies("pyg"),
     }
-    diagnostics["mps_memory_probe"] = mps_memory_probe()
+    diagnostics["cuda_memory_probe"] = cuda_memory_probe()
     diagnostics["memory_telemetry_fields"] = [
         "memory_mode",
-        "mps_allocated_peak_bytes",
-        "mps_reserved_peak_bytes",
+        "device_allocated_peak_bytes",
+        "device_reserved_peak_bytes",
         "memory_phase_peaks",
     ]
     print(json.dumps(diagnostics, indent=2, sort_keys=True))

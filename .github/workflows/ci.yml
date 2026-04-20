@@ -24,28 +24,3 @@ jobs:
       - name: Run unit and smoke tests
         run: |
           pytest
-
-  mps-smoke:
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install package
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,torchdrug,pyg]"
-      - name: Diagnose runtime
-        run: |
-          diffpack-infer --diagnose
-      - name: MPS smoke (non-fatal while backend runtime is being migrated)
-        continue-on-error: true
-        run: |
-          diffpack-infer --backend torchdrug --device mps --config src/diffpack/config/inference.yaml --pdb_files 1ubq.pdb --output_dir output_mps_smoke
-          diffpack-check-structure --input 1ubq.pdb --output output_mps_smoke/1ubq.pdb --metadata output_mps_smoke/run_metadata.json --report output_mps_smoke/checker.json
-      - name: MPS smoke (pyg transitional)
-        continue-on-error: true
-        run: |
-          diffpack-infer --backend pyg --device mps --config src/diffpack/config/inference.yaml --pdb_files 1ubq.pdb --output_dir output_mps_smoke_pyg
-          diffpack-check-structure --input 1ubq.pdb --output output_mps_smoke_pyg/1ubq.pdb --metadata output_mps_smoke_pyg/run_metadata.json --report output_mps_smoke_pyg/checker.json

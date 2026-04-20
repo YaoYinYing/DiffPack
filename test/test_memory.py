@@ -1,15 +1,14 @@
 import pytest
 torch = pytest.importorskip("torch")
 
-from diffpack.memory import MemoryTracker, mps_memory_probe
+from diffpack.memory import MemoryTracker, cuda_memory_probe
 
 
-def test_mps_memory_probe_schema():
-    payload = mps_memory_probe()
-    assert "mps_backend_available" in payload
-    assert "has_torch_mps_module" in payload
-    assert "has_current_allocated_memory" in payload
-    assert "has_driver_allocated_memory" in payload
+def test_cuda_memory_probe_schema():
+    payload = cuda_memory_probe()
+    assert "cuda_available" in payload
+    assert "has_memory_allocated" in payload
+    assert "has_memory_reserved" in payload
     assert "has_empty_cache" in payload
 
 
@@ -19,7 +18,7 @@ def test_memory_tracker_cpu_metadata():
     tracker.sample("generation_loop")
     payload = tracker.metadata()
     assert payload["memory_mode"] == "quality"
-    assert payload["mps_allocated_peak_bytes"] is None
-    assert payload["mps_reserved_peak_bytes"] is None
+    assert payload["device_allocated_peak_bytes"] is None
+    assert payload["device_reserved_peak_bytes"] is None
     assert "dataset_load" in payload["memory_phase_peaks"]
     assert "generation_loop" in payload["memory_phase_peaks"]

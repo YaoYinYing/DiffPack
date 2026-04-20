@@ -17,7 +17,7 @@ from diffpack.util import get_default_config_path
 def parse_args():
     parser = argparse.ArgumentParser(description="Run DiffPack benchmark")
     parser.add_argument("--backend", default="native", choices=["native", "torchdrug", "pyg"])
-    parser.add_argument("--device", default="cpu", choices=["cpu", "cuda", "mps"])
+    parser.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
     parser.add_argument("--config", default=get_default_config_path("inference_confidence.yaml"))
     parser.add_argument("--pdb_files", nargs="*", default=["1ubq.pdb"])
     parser.add_argument("--output_dir", default="benchmark_output")

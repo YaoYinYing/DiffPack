@@ -66,7 +66,7 @@ python script/inference.py --help
 diffpack-infer [options]
 
 --backend {native,torchdrug,pyg}
---device {cpu,cuda,mps}
+--device {cpu,cuda}
 --diagnose
 --profile
 --fast
@@ -84,9 +84,11 @@ It also reports NumPy/ABI dependency probe status for each backend.
 - `torchdrug`: internal TorchDrug backend (vendored code under `src/diffpack/torchdrug`).
 - `pyg`: torch_geometric-native backend.
 
-## MPS and macOS
+## Apple Silicon / MPS
 
-- MPS is supported at the DiffPack runtime layer (`--device mps`) when backend runtime supports it.
+- MPS is intentionally **not supported** in DiffPack.
+- Reason: we observed unstable runtime and memory behavior on MPS that is not release-grade compared with CPU/CUDA execution.
+- On Apple Silicon, use `--device cpu`.
 - OpenMP flags are not required in DiffPack itself; vendored TorchDrug runtime/toolchain setup controls extension compile flags.
 
 ## Testing
@@ -101,9 +103,14 @@ pytest -q
 python benchmarks/run_benchmark.py --device cpu --backend native
 python benchmarks/run_benchmark.py --device cpu --backend torchdrug
 python benchmarks/run_benchmark.py --device cpu --backend pyg --reference_backend torchdrug
+
+# Repeated CPU backend comparison (torchdrug/native/pyg)
+python benchmarks/cpu_triplet_compare.py --repeats 3 --aggregate median
 ```
 
 Benchmarks run strict geometry checks (ported from DLPacker checker logic) and fail checker status when severe clashes or bond outliers are detected.
+
+Reference CPU comparison artifacts are tracked in `benchmarks/reference/` and mirrored into `outputs/` when you run the comparison script.
 
 NumPy compatibility status is tracked in [docs/numpy-compatibility.md](docs/numpy-compatibility.md).
 

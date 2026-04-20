@@ -68,11 +68,10 @@ class Engine(core.Configurable):
         self.gradient_interval = gradient_interval
         self.num_worker = num_worker
 
-        mps_available = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
         if gpus is None:
-            self.device = torch.device("mps" if mps_available else "cpu")
+            self.device = torch.device("cpu")
         elif not torch.cuda.is_available():
-            self.device = torch.device("mps" if mps_available else "cpu")
+            self.device = torch.device("cpu")
         else:
             if len(gpus) != self.world_size:
                 error_msg = "World size is %d but found %d GPUs in the argument"
@@ -106,7 +105,7 @@ class Engine(core.Configurable):
                 if not isinstance(buffer, torch.Tensor):
                     buffers_to_ignore.append(name)
             task._ddp_params_and_buffers_to_ignore = set(buffers_to_ignore)
-        if self.device.type in {"cuda", "mps"}:
+        if self.device.type == "cuda":
             task = task.to(self.device)
 
         self.model = task

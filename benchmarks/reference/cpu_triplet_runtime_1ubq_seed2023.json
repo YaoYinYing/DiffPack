@@ -1,0 +1,70 @@
+{
+  "rows": [
+    {
+      "backend": "torchdrug",
+      "device": "cpu",
+      "elapsed_sec_backend": 5.435565583000425,
+      "elapsed_sec_wall": 12.260978208003507,
+      "elapsed_sec_wall_rank": 2,
+      "item": "inference_full",
+      "peak_rss_kib": 1986379776,
+      "peak_rss_kib_rank": 1,
+      "status": "PASS"
+    },
+    {
+      "backend": "native",
+      "device": "cpu",
+      "elapsed_sec_backend": 9.453045708003629,
+      "elapsed_sec_wall": 11.519178667003871,
+      "elapsed_sec_wall_rank": 1,
+      "item": "inference_full",
+      "peak_rss_kib": 2166538240,
+      "peak_rss_kib_rank": 2,
+      "status": "PASS"
+    },
+    {
+      "backend": "pyg",
+      "device": "cpu",
+      "elapsed_sec_backend": 10.504790458006028,
+      "elapsed_sec_wall": 14.225198041000112,
+      "elapsed_sec_wall_rank": 3,
+      "item": "inference_full",
+      "peak_rss_kib": 2537717760,
+      "peak_rss_kib_rank": 3,
+      "status": "PASS"
+    },
+    {
+      "backend": "torchdrug",
+      "device": "cpu",
+      "elapsed_sec_backend": 20.75760412499949,
+      "elapsed_sec_wall": 27.434148666994588,
+      "elapsed_sec_wall_rank": 1,
+      "item": "inference_confidence_local",
+      "peak_rss_kib": 2126528512,
+      "peak_rss_kib_rank": 1,
+      "status": "PASS"
+    },
+    {
+      "backend": "native",
+      "device": "cpu",
+      "elapsed_sec_backend": 38.416564833998564,
+      "elapsed_sec_wall": 40.32614304100571,
+      "elapsed_sec_wall_rank": 2,
+      "item": "inference_confidence_local",
+      "peak_rss_kib": 2494480384,
+      "peak_rss_kib_rank": 2,
+      "status": "PASS"
+    },
+    {
+      "backend": "pyg",
+      "device": "cpu",
+      "elapsed_sec_backend": 42.57123787499586,
+      "elapsed_sec_wall": 46.28463129100419,
+      "elapsed_sec_wall_rank": 3,
+      "item": "inference_confidence_local",
+      "peak_rss_kib": 2581889024,
+      "peak_rss_kib_rank": 3,
+      "status": "PASS"
+    }
+  ]
+}

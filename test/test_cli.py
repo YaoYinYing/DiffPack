@@ -58,5 +58,5 @@ def test_run_diagnostics_outputs_json(capsys):
     assert pyg_preview["backend_mode"] == "native"
     assert "backend_dependency_probe" in payload
     assert "native" in payload["backend_dependency_probe"]
-    assert "mps_memory_probe" in payload
+    assert "cuda_memory_probe" in payload
     assert "memory_telemetry_fields" in payload

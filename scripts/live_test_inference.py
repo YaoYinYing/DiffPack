@@ -11,7 +11,7 @@ from pathlib import Path
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run DiffPack live inference test with structure checker")
     parser.add_argument("--backend", choices=["native", "torchdrug", "pyg"], default="native")
-    parser.add_argument("--device", choices=["cpu", "cuda", "mps"], default="cpu")
+    parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
     parser.add_argument("--config", default="config/inference_confidence.yaml")
     parser.add_argument("--pdb_file", default="1ubq.pdb")
     parser.add_argument("--output_dir", default="live_test_output")
@@ -84,4 +84,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

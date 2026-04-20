@@ -6,39 +6,29 @@ from typing import Any
 import torch
 
 
-def mps_memory_probe() -> dict[str, Any]:
-    has_backend = hasattr(torch.backends, "mps")
-    backend_available = bool(has_backend and torch.backends.mps.is_available())
-    module = getattr(torch, "mps", None)
+def cuda_memory_probe() -> dict[str, Any]:
     return {
-        "mps_backend_available": backend_available,
-        "has_torch_mps_module": module is not None,
-        "has_current_allocated_memory": bool(module and hasattr(module, "current_allocated_memory")),
-        "has_driver_allocated_memory": bool(module and hasattr(module, "driver_allocated_memory")),
-        "has_empty_cache": bool(module and hasattr(module, "empty_cache")),
+        "cuda_available": bool(torch.cuda.is_available()),
+        "has_memory_allocated": bool(hasattr(torch.cuda, "memory_allocated")),
+        "has_memory_reserved": bool(hasattr(torch.cuda, "memory_reserved")),
+        "has_empty_cache": bool(hasattr(torch.cuda, "empty_cache")),
     }
 
 
-def read_mps_memory_bytes() -> tuple[int | None, int | None]:
-    probe = mps_memory_probe()
-    if not probe["mps_backend_available"] or not probe["has_torch_mps_module"]:
+def read_device_memory_bytes(device: torch.device) -> tuple[int | None, int | None]:
+    if device.type != "cuda" or not torch.cuda.is_available():
         return None, None
-    module = torch.mps  # type: ignore[attr-defined]
-    allocated = None
-    reserved = None
-    if probe["has_current_allocated_memory"]:
-        allocated = int(module.current_allocated_memory())  # type: ignore[call-arg]
-    if probe["has_driver_allocated_memory"]:
-        reserved = int(module.driver_allocated_memory())  # type: ignore[call-arg]
+    allocated = int(torch.cuda.memory_allocated(device=device))
+    reserved = int(torch.cuda.memory_reserved(device=device))
     return allocated, reserved
 
 
 def release_device_cache(device: torch.device, *, aggressive: bool = False) -> None:
-    if device.type != "mps":
+    if device.type != "cuda" or not torch.cuda.is_available():
         return
-    if aggressive or hasattr(torch.mps, "empty_cache"):  # type: ignore[attr-defined]
+    if aggressive or hasattr(torch.cuda, "empty_cache"):
         try:
-            torch.mps.empty_cache()  # type: ignore[attr-defined]
+            torch.cuda.empty_cache()
         except Exception:
             return
 
@@ -52,7 +42,7 @@ class MemoryTracker:
     reserved_peak_bytes: int | None = None
 
     def sample(self, phase: str) -> None:
-        allocated, reserved = read_mps_memory_bytes() if self.device.type == "mps" else (None, None)
+        allocated, reserved = read_device_memory_bytes(self.device)
         if phase not in self.phase_peaks:
             self.phase_peaks[phase] = {"allocated_peak_bytes": allocated, "reserved_peak_bytes": reserved}
         else:
@@ -65,8 +55,8 @@ class MemoryTracker:
     def metadata(self) -> dict[str, Any]:
         return {
             "memory_mode": self.mode,
-            "mps_allocated_peak_bytes": self.allocated_peak_bytes,
-            "mps_reserved_peak_bytes": self.reserved_peak_bytes,
+            "device_allocated_peak_bytes": self.allocated_peak_bytes,
+            "device_reserved_peak_bytes": self.reserved_peak_bytes,
             "memory_phase_peaks": self.phase_peaks,
         }
 

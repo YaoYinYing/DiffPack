@@ -145,8 +145,8 @@ class TorchDrugCompatibleRunner:
             "elapsed_sec": elapsed,
             "profile_path": profile_path,
             "memory_mode": request.memory_mode,
-            "mps_allocated_peak_bytes": None,
-            "mps_reserved_peak_bytes": None,
+            "device_allocated_peak_bytes": None,
+            "device_reserved_peak_bytes": None,
             "memory_phase_peaks": {},
         }
         if isinstance(run_summary, dict):
