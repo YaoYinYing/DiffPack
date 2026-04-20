@@ -1,6 +1,15 @@
 import numpy as np
 import pytest
 torch = pytest.importorskip("torch")
+from diffpack.backend_preflight import probe_backend_dependencies
+
+_torchdrug_probe = probe_backend_dependencies("torchdrug")
+if _torchdrug_probe["status"] != "pass":
+    pytest.skip(
+        f"Skipping torchdrug rotamer tests due to ABI preflight failure: {_torchdrug_probe['required_errors']}",
+        allow_module_level=True,
+    )
+
 from diffpack.torchdrug import data
 
 from diffpack import rotamer

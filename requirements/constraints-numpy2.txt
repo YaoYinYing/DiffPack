@@ -1,0 +1,10 @@
+# NumPy 2.x compatibility lane (pip-only wheels).
+# Keep this file aligned with CI numpy-compat workflow.
+
+numpy>=2,<3
+scipy>=1.14
+torch>=2.3.0
+torch-geometric>=2.6.0
+torch-scatter>=2.1.2
+torch-cluster>=1.6.3
+rdkit>=2024.3.5

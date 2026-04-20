@@ -9,6 +9,11 @@ from diffpack.backends.native_runtime import NativeConfigTranslator, PygTorsiona
 from diffpack.util import get_default_config_path, load_config
 
 
+@pytest.fixture(autouse=True)
+def _skip_abi_preflight(monkeypatch):
+    monkeypatch.setenv("DIFFPACK_SKIP_ABI_PREFLIGHT", "1")
+
+
 def test_get_torchdrug_backend():
     adapter = get_backend_adapter("torchdrug")
     assert adapter.name == "torchdrug"

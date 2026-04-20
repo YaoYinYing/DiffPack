@@ -1,4 +1,5 @@
 
+*.DS_Store
 model/gearnet_edge_confidence_converted.pth
 *.pyc
 /tmp

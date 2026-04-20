@@ -42,6 +42,7 @@ def test_run_diagnostics_outputs_json(capsys):
     out = capsys.readouterr().out
     payload = json.loads(out)
     assert "torch_version" in payload
+    assert "numpy_version" in payload
     assert "platform" in payload
     native_preview = payload["backend_resolution_preview"]["native"]
     assert native_preview["backend_effective"] == "native"
@@ -52,3 +53,5 @@ def test_run_diagnostics_outputs_json(capsys):
     pyg_preview = payload["backend_resolution_preview"]["pyg"]
     assert pyg_preview["backend_effective"] == "pyg"
     assert pyg_preview["backend_mode"] == "native"
+    assert "backend_dependency_probe" in payload
+    assert "native" in payload["backend_dependency_probe"]

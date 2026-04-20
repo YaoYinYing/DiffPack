@@ -21,6 +21,16 @@ pip install -e ".[torchdrug]"
 pip install -e ".[pyg]"
 ```
 
+### 2.1) Reproducible NumPy compatibility lanes (pip-only)
+
+```bash
+# NumPy 2.x lane
+pip install -e ".[dev,torchdrug,pyg]" -c requirements/constraints-numpy2.txt
+
+# NumPy 1.26 legacy lane
+pip install -e ".[dev,torchdrug,pyg]" -c requirements/constraints-numpy126.txt
+```
+
 ### 3) Run inference
 
 ```bash
@@ -66,6 +76,7 @@ diffpack-infer [options]
 ```
 
 `--diagnose` prints runtime/compiler/backend capabilities and exits.
+It also reports NumPy/ABI dependency probe status for each backend.
 
 ## Backend Notes
 

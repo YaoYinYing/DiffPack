@@ -1,12 +1,15 @@
 # Convenience install list for local environments.
 # Source of truth is pyproject.toml [project.dependencies].
+# For reproducible NumPy lanes, prefer:
+#   pip install -e ".[dev,torchdrug,pyg]" -c requirements/constraints-numpy2.txt
+#   pip install -e ".[dev,torchdrug,pyg]" -c requirements/constraints-numpy126.txt
 torch>=2.3.0
 torch-scatter>=2.1.2
 torch-cluster>=1.6.3
 torch-geometric>=2.6.0
 decorator
 numpy>=1.26.4
-rdkit-pypi>=2020.9
+rdkit>=2024.3.5
 matplotlib
 tqdm
 networkx

@@ -7,8 +7,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import numpy as np
 import yaml
 
+from diffpack.backend_preflight import probe_backend_dependencies
 from diffpack.backends import InferenceRequest, get_backend_adapter
 from diffpack.device import device_diagnostics
 from diffpack.util import get_default_config_path
@@ -55,6 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_diagnostics():
     diagnostics = device_diagnostics()
+    diagnostics["numpy_version"] = np.__version__
     diagnostics["clang"] = bool(shutil.which("clang"))
     diagnostics["clang++"] = bool(shutil.which("clang++"))
     diagnostics["git"] = bool(shutil.which("git"))
@@ -94,6 +97,11 @@ def run_diagnostics():
             "backend_mode": "native",
             "fallback_reason": None,
         },
+    }
+    diagnostics["backend_dependency_probe"] = {
+        "native": probe_backend_dependencies("native"),
+        "torchdrug": probe_backend_dependencies("torchdrug"),
+        "pyg": probe_backend_dependencies("pyg"),
     }
     print(json.dumps(diagnostics, indent=2, sort_keys=True))
 

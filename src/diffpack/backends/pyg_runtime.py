@@ -5,6 +5,7 @@ import pprint
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -23,10 +24,17 @@ from diffpack.schedule_cache import (
     resolve_cache_root,
     validate_required_schedule_caches,
 )
-try:
-    from rdkit import Chem
-except Exception:  # pragma: no cover - optional at runtime
-    Chem = None
+
+
+@lru_cache(maxsize=1)
+def _load_rdkit_chem():
+    if os.environ.get("DIFFPACK_SKIP_RDKIT", "").strip() == "1":
+        return None
+    try:
+        from rdkit import Chem  # type: ignore
+    except Exception:  # pragma: no cover - optional at runtime
+        return None
+    return Chem
 
 def _scatter_add(src: torch.Tensor, index: torch.Tensor, dim_size: int) -> torch.Tensor:
     out = src.new_zeros((dim_size,) + src.shape[1:])
@@ -1020,8 +1028,9 @@ class PygSideChainDataset:
         bond2id = {"SINGLE": 0, "DOUBLE": 1, "TRIPLE": 2, "AROMATIC": 3}
         edges = []
         # Prefer RDKit bond parsing to match TorchDrug bond relation semantics.
-        if Chem is not None:
-            mol = Chem.MolFromPDBFile(pdb_path, sanitize=True, removeHs=True)
+        chem_mod = _load_rdkit_chem()
+        if chem_mod is not None:
+            mol = chem_mod.MolFromPDBFile(pdb_path, sanitize=True, removeHs=True)
             if mol is not None:
                 key_to_indices: dict[tuple[str, int, str], list[int]] = {}
                 for idx, key in enumerate(atom_keys):

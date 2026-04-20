@@ -3,15 +3,19 @@
 ## Policy
 
 - Required baseline: `numpy>=1.26.4`.
-- Experimental lane: `numpy>=2,<3` (quarantined in CI with `allow_failure=true`).
+- Required compatibility lane: `numpy>=2,<3`.
+- Dependency strategy: pip-only wheels with explicit constraints files.
 
-## Current Status (2026-04-18)
+## Current Status (2026-04-20)
 
-- `numpy==1.26.4`: pass on current test and smoke suite.
-- `numpy==2.0.2`: **blocked** in current runtime stack due a hard crash in the
-  RDKit / TorchDrug molecule construction path (segmentation fault during protein parsing).
+- `numpy==1.26.4`: supported via `requirements/constraints-numpy126.txt`.
+- `numpy>=2,<3`: supported target via `requirements/constraints-numpy2.txt`.
+- Runtime now performs backend ABI preflight checks and fails fast with remediation commands if
+  binary dependencies are incompatible (instead of late segfaults).
 
 ## Practical Guidance
 
-- Use `numpy==1.26.4` for production and release builds.
-- Keep NumPy 2 lane running in CI as an early-warning signal while upstream stack compatibility matures.
+- Install with one of:
+  - `pip install -e ".[dev,torchdrug,pyg]" -c requirements/constraints-numpy126.txt`
+  - `pip install -e ".[dev,torchdrug,pyg]" -c requirements/constraints-numpy2.txt`
+- Run `diffpack-infer --diagnose` before inference to validate backend dependency readiness.
