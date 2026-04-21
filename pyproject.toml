@@ -41,12 +41,10 @@ dependencies = [
 torchdrug = [
   "torch-scatter>=2.1.2",
   "torch-cluster>=1.6.3",
-  "torch-geometric>=2.6.0",
+  "matplotlib>=3.8",
+  "networkx>=3.2",
   "lmdb",
   "fair-esm",
-  "transformers>=4.18.0",
-  "matplotlib",
-  "networkx",
   "ninja",
 ]
 pyg = [
