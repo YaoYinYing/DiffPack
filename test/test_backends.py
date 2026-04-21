@@ -15,6 +15,7 @@ def _skip_abi_preflight(monkeypatch):
 
 
 def test_get_torchdrug_backend():
+    pytest.importorskip("torch_scatter")
     adapter = get_backend_adapter("torchdrug")
     assert adapter.name == "torchdrug"
 
@@ -25,6 +26,7 @@ def test_get_native_backend():
 
 
 def test_get_pyg_backend():
+    pytest.importorskip("torch_geometric")
     adapter = get_backend_adapter("pyg")
     assert adapter.name == "pyg"
 

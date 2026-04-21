@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sys
 
+import pytest
+
 from diffpack.backends import get_backend_adapter
 
 
@@ -25,6 +27,7 @@ def test_native_backend_does_not_import_other_runtimes(monkeypatch):
 
 
 def test_pyg_backend_does_not_import_other_runtimes(monkeypatch):
+    pytest.importorskip("torch_geometric")
     monkeypatch.setenv("DIFFPACK_SKIP_ABI_PREFLIGHT", "1")
     _clear_backend_modules()
     get_backend_adapter("pyg")
@@ -34,6 +37,7 @@ def test_pyg_backend_does_not_import_other_runtimes(monkeypatch):
 
 
 def test_torchdrug_backend_does_not_import_other_runtimes(monkeypatch):
+    pytest.importorskip("torch_scatter")
     monkeypatch.setenv("DIFFPACK_SKIP_ABI_PREFLIGHT", "1")
     _clear_backend_modules()
     get_backend_adapter("torchdrug")
