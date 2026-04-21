@@ -128,3 +128,28 @@ def select_residues_by_radius(
         repack_residue_mask[touched_residue] = True
 
     return repack_residue_mask, center_indices
+
+
+def select_residues_exact(
+    num_residue: int,
+    residue_identifiers: Sequence[CenterSelector],
+    selectors: Sequence[CenterSelector],
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    if not selectors:
+        raise ValueError("`selectors` must be non-empty for exact residue selection.")
+    if len(residue_identifiers) != int(num_residue):
+        raise ValueError(
+            "Residue identifier count mismatch: "
+            f"{len(residue_identifiers)} from PDB vs {int(num_residue)} in protein graph."
+        )
+    selector_set = set(selectors)
+    repack_residue_mask = torch.zeros(num_residue, dtype=torch.bool, device=device)
+    for residue_idx, residue_identifier in enumerate(residue_identifiers):
+        if residue_identifier in selector_set:
+            repack_residue_mask[residue_idx] = True
+    if not repack_residue_mask.any():
+        missing = ", ".join([f"{chain}:{resid}" for chain, resid in sorted(selector_set)])
+        raise ValueError(f"Mutation residues not found in PDB: {missing}")
+    return repack_residue_mask

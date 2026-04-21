@@ -18,6 +18,7 @@ from diffpack import repack, rotamer, util
 from diffpack.clash_guard import mitigate_severe_clashes
 from diffpack.device import choose_torch_device, move_to_device
 from diffpack.memory import MemoryTracker, release_device_cache
+from diffpack.pdb_connectivity import append_conect_records_inplace
 from diffpack.schedule_cache import (
     load_schedule_tables_readonly,
     resolve_cache_root,
@@ -353,6 +354,10 @@ class PygGraphConstruction(nn.Module):
                 num_relation = 1
             else:
                 num_relation = int(edge_list[:, 2].max().item()) + 1 if edge_list.numel() else 1
+        if self.edge_layers and edge_list.numel():
+            edge2graph = protein.atom2graph[edge_list[:, 0]]
+            order = edge2graph.argsort()
+            edge_list = edge_list[order]
 
         edge_feature = None
         if self.edge_feature == "gearnet":
@@ -447,21 +452,28 @@ class PygSpatialLineGraph(nn.Module):
             node_feature = graph.edge_feature if graph.edge_feature is not None else torch.zeros((0, 0), device=graph.device)
             return PygLineGraph(empty_edge, node_feature, self.num_angle_bin, 0, graph.device, edge_weight=torch.zeros(0, device=graph.device))
 
+        # Match torchdrug.data.Graph.line_graph() ordering exactly.
         node_in = edge_index[:, 0]
         node_out = edge_index[:, 1]
-        pairs = []
-        for middle in range(graph.num_node):
-            incoming = torch.nonzero(node_out == middle, as_tuple=False).flatten()
-            outgoing = torch.nonzero(node_in == middle, as_tuple=False).flatten()
-            if incoming.numel() == 0 or outgoing.numel() == 0:
-                continue
-            edge_in = incoming.repeat_interleave(outgoing.numel())
-            edge_out = outgoing.repeat(incoming.numel())
-            pairs.append(torch.stack([edge_in, edge_out], dim=-1))
-        if pairs:
-            lg = torch.cat(pairs, dim=0)
-        else:
+        edge_ids = torch.arange(num_edge, device=graph.device)
+        edge_in = edge_ids[node_out.argsort()]
+        edge_out = edge_ids[node_in.argsort()]
+
+        degree_in = torch.bincount(node_in, minlength=graph.num_node)
+        degree_out = torch.bincount(node_out, minlength=graph.num_node)
+        size = degree_out * degree_in
+        if int(size.sum().item()) == 0:
             lg = torch.zeros((0, 2), dtype=torch.long, device=graph.device)
+        else:
+            starts = (size.cumsum(0) - size).repeat_interleave(size)
+            idx = torch.arange(int(size.sum().item()), device=graph.device)
+            local_index = idx - starts
+            local_inner_size = degree_in.repeat_interleave(size)
+            edge_in_offset = (degree_out.cumsum(0) - degree_out).repeat_interleave(size)
+            edge_out_offset = (degree_in.cumsum(0) - degree_in).repeat_interleave(size)
+            edge_in_index = torch.div(local_index, local_inner_size, rounding_mode="floor") + edge_in_offset
+            edge_out_index = local_index % local_inner_size + edge_out_offset
+            lg = torch.stack([edge_in[edge_in_index], edge_out[edge_out_index]], dim=-1)
 
         if lg.numel():
             edge_in, edge_out = lg[:, 0], lg[:, 1]
@@ -533,10 +545,24 @@ class PygGearNet(nn.Module):
                     for i in range(len(edge_dims) - 1)
                 ]
             )
+        self._parity_debug_enabled = False
+        self._last_parity_debug = None
+
+    def set_parity_debug(self, enabled: bool):
+        self._parity_debug_enabled = bool(enabled)
+        if not enabled:
+            self._last_parity_debug = None
 
     def forward(self, graph: PygProteinGraph, input_feature: torch.Tensor, all_loss=None, metric=None):
         hiddens = []
         layer_input = input_feature
+        debug = None
+        if self._parity_debug_enabled:
+            debug = {
+                "line_graph_edge_list": None,
+                "layer_node_hidden": [],
+                "layer_edge_hidden": [],
+            }
         if self.num_angle_bin:
             line_graph = self.spatial_line_graph(graph)
             edge_input = line_graph.node_feature.float()
@@ -547,6 +573,8 @@ class PygGearNet(nn.Module):
                 else:
                     pad = edge_input.new_zeros((edge_input.shape[0], expected_edge_dim - edge_input.shape[1]))
                     edge_input = torch.cat([edge_input, pad], dim=-1)
+            if debug is not None:
+                debug["line_graph_edge_list"] = line_graph.edge_list.detach().cpu()
 
         for i, conv in enumerate(self.layers):
             hidden = conv(graph, layer_input)
@@ -566,9 +594,13 @@ class PygGearNet(nn.Module):
                     update = conv.activation(update)
                 hidden = hidden + update
                 edge_input = edge_hidden
+                if debug is not None:
+                    debug["layer_edge_hidden"].append(edge_hidden.detach().cpu())
                 del weighted_edge_hidden, update
             if self.use_post_batch_norm:
                 hidden = self.batch_norms[i](hidden)
+            if debug is not None:
+                debug["layer_node_hidden"].append(hidden.detach().cpu())
             hiddens.append(hidden)
             layer_input = hidden
 
@@ -584,7 +616,11 @@ class PygGearNet(nn.Module):
                 graph_feature = _scatter_mean(node_feature, graph_ids, graph.batch_size)
         if self.num_angle_bin:
             del line_graph, edge_input
-        return {"graph_feature": graph_feature, "node_feature": node_feature}
+        output = {"graph_feature": graph_feature, "node_feature": node_feature}
+        if debug is not None:
+            self._last_parity_debug = debug
+            output["_parity_debug"] = debug
+        return output
 
 
 class PygMLP(nn.Module):
@@ -943,11 +979,26 @@ class PygSideChainDataset:
                      "ASP", "GLN", "LYS", "GLU", "MET", "HIS", "PHE", "ARG", "TYR", "TRP"]
     _residue_vocab_map = {name: i for i, name in enumerate(_residue_vocab)}
 
-    def __init__(self, pdb_files=None, center_residues=None, repack_radius=None, hetero_policy="exclude", **kwargs):
+    def __init__(
+        self,
+        pdb_files=None,
+        center_residues=None,
+        repack_radius=None,
+        mutation_residues=None,
+        frozen_residues=None,
+        hetero_policy="exclude",
+        **kwargs,
+    ):
         self.pdb_files = [os.path.expanduser(p) for p in (pdb_files or [])]
         self.center_residue_selectors = repack.parse_center_residue_selectors(center_residues or [])
+        self.mutation_residue_selectors = repack.parse_center_residue_selectors(mutation_residues or [])
+        self.frozen_residue_selectors = repack.parse_center_residue_selectors(frozen_residues or [])
         self.repack_radius = repack_radius
         self.hetero_policy = hetero_policy
+        if self.repack_radius is not None and self.repack_radius < -1:
+            raise ValueError(f"`repack_radius` must be one of -1, 0, or >0. Got {self.repack_radius}.")
+        if self.repack_radius is not None and self.repack_radius > 0 and len(self.center_residue_selectors) == 0:
+            raise ValueError("`center_residues` must be provided when `repack_radius` is > 0.")
 
     def __len__(self):
         return len(self.pdb_files)
@@ -1023,6 +1074,17 @@ class PygSideChainDataset:
         residue_identifiers = [(c, n) for c, n in residue_keys]
         if self.repack_radius is None:
             protein.repack_residue_mask = torch.ones(protein.num_residue, dtype=torch.bool, device=protein.device)
+        elif self.repack_radius == 0:
+            protein.repack_residue_mask = torch.ones(protein.num_residue, dtype=torch.bool, device=protein.device)
+        elif self.repack_radius == -1:
+            if len(self.mutation_residue_selectors) == 0:
+                raise ValueError("`mutation_residues` must be provided when `repack_radius` is -1.")
+            protein.repack_residue_mask = repack.select_residues_exact(
+                num_residue=protein.num_residue,
+                residue_identifiers=residue_identifiers,
+                selectors=self.mutation_residue_selectors,
+                device=protein.device,
+            )
         else:
             repack_mask, _ = repack.select_residues_by_radius(
                 atom_positions=protein.node_position,
@@ -1033,6 +1095,14 @@ class PygSideChainDataset:
                 radius=self.repack_radius,
             )
             protein.repack_residue_mask = repack_mask
+        if len(self.frozen_residue_selectors) > 0:
+            frozen_mask = repack.select_residues_exact(
+                num_residue=protein.num_residue,
+                residue_identifiers=residue_identifiers,
+                selectors=self.frozen_residue_selectors,
+                device=protein.device,
+            )
+            protein.repack_residue_mask = protein.repack_residue_mask & (~frozen_mask)
         return protein
 
     def _build_edges(
@@ -1144,9 +1214,25 @@ class PygTorsionalDiffusion(nn.Module):
         self.graph_construction_model = graph_construction_model
         self.train_chi_id = train_chi_id
         self.memory_mode = "quality"
+        self._parity_debug_enabled = False
+        self._last_predict_debug = None
 
     def set_memory_mode(self, mode: str):
         self.memory_mode = mode
+
+    def set_parity_debug(self, enabled: bool):
+        self._parity_debug_enabled = bool(enabled)
+        self._last_predict_debug = None
+        for model in self.model_list:
+            if hasattr(model, "set_parity_debug"):
+                model.set_parity_debug(enabled)
+        if hasattr(self, "confidence_model") and hasattr(self.confidence_model, "set_parity_debug"):
+            self.confidence_model.set_parity_debug(enabled)
+
+    def pop_last_predict_debug(self):
+        debug = self._last_predict_debug
+        self._last_predict_debug = None
+        return debug
 
     def predict(self, batch):
         protein = batch["graph"]
@@ -1158,7 +1244,8 @@ class PygTorsionalDiffusion(nn.Module):
             graph = PygProteinGraph(protein=protein, edge_list=protein.edge_list, edge_feature=None, num_relation=protein.num_relation)
         node_sigma = sigma[graph.atom2graph]
         node_feature = self.sigma_embedding_list[chi_id](graph.node_feature.float(), node_sigma)
-        node_feature = self.model_list[chi_id](graph, node_feature)["node_feature"]
+        model_output = self.model_list[chi_id](graph, node_feature)
+        node_feature = model_output["node_feature"]
         residue_feature = _scatter_mean(node_feature, graph.atom2residue, graph.num_residue)
         pred = self.torsion_mlp_list[chi_id](residue_feature)
         torsion_sigma = sigma[graph.residue2graph].unsqueeze(-1).expand(-1, self.NUM_CHI_ANGLES)
@@ -1175,6 +1262,16 @@ class PygTorsionalDiffusion(nn.Module):
         score_norm = torch.where(graph.chi_1pi_periodic_mask, score_norm_1pi, score_norm_2pi)
         pred_score = pred * score_norm.sqrt()
         pred_score = pred_score * graph.chi_mask.to(pred_score.dtype)
+        if self._parity_debug_enabled:
+            model_debug = model_output.get("_parity_debug") if isinstance(model_output, dict) else None
+            self._last_predict_debug = {
+                "model_line_graph_edge_list": model_debug.get("line_graph_edge_list") if model_debug else None,
+                "model_layer_node_hidden_last": model_debug.get("layer_node_hidden", [None])[-1] if model_debug else None,
+                "model_layer_edge_hidden_last": model_debug.get("layer_edge_hidden", [None])[-1] if model_debug else None,
+                "predict_graph_chi_mask": graph.chi_mask.detach().cpu(),
+                "model_residue_feature": residue_feature.detach().cpu(),
+                "model_torsion_mlp_output": pred.detach().cpu(),
+            }
         return pred_score, score_norm
 
     @torch.no_grad()
@@ -1446,6 +1543,8 @@ class NativeRunner:
         cfg.test_set.pdb_files = request.pdb_files
         cfg.test_set.center_residues = request.center_residues
         cfg.test_set.repack_radius = request.repack_radius
+        cfg.test_set.mutation_residues = request.mutation_residues or []
+        cfg.test_set.frozen_residues = request.frozen_residues or []
         cfg.test_set.hetero_policy = request.hetero_policy
         cfg.backend = backend_effective
         cfg.cache = cfg.get("cache", {})
@@ -1533,6 +1632,7 @@ class NativeRunner:
                 pdb_file = os.path.basename(test_set.pdb_files[i])
                 output_path = os.path.join(request.output_dir, pdb_file)
                 pred.cpu().to_pdb(output_path)
+                append_conect_records_inplace(output_path)
                 output_files.append(output_path)
                 memory_tracker.sample("write_output")
         elapsed = time.perf_counter() - start

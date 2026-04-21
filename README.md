@@ -41,6 +41,7 @@ diffpack-infer \
   --seed 2023 \
   --output_dir output \
   --pdb_files 1ubq.pdb \
+  --mutations AG76A,AG65A \
   --center_residues A:72 \
   --repack_radius 10 \
   --hetero_policy exclude \
@@ -70,10 +71,23 @@ diffpack-infer [options]
 --diagnose
 --profile
 --fast
+--mutations AG76A,AG65A
 --center_residues CHAIN:RESID ...
 --repack_radius FLOAT
 --hetero_policy {exclude,context_only,error}
 ```
+
+Mutation grammar:
+
+- Compact format: `AG76A` (`[chain][old_res_1][position][new_res_1]`)
+- Multiple mutations: comma-separated, e.g. `AG76A,AG65A`
+- Programmatic API also accepts `list[dict]` with keys `chain`, `old_res`, `position`, `new_res`
+
+Mutation-aware repack behavior:
+
+- `--repack_radius -1`: repack only mutated residues
+- `--repack_radius 0`: full repack
+- `--repack_radius > 0`: local repack around union of mutation sites and explicit `--center_residues`
 
 `--diagnose` prints runtime/compiler/backend capabilities and exits.
 It also reports NumPy/ABI dependency probe status for each backend.
@@ -106,6 +120,9 @@ python benchmarks/run_benchmark.py --device cpu --backend pyg --reference_backen
 
 # Repeated CPU backend comparison (torchdrug/native/pyg)
 python benchmarks/cpu_triplet_compare.py --repeats 3 --aggregate median
+
+# Backend x confidence x task matrix (with checker + timing + PDB export)
+python benchmarks/backend_conf_task_matrix.py --repeats 1 --device cpu
 ```
 
 Benchmarks run strict geometry checks (ported from DLPacker checker logic) and fail checker status when severe clashes or bond outliers are detected.

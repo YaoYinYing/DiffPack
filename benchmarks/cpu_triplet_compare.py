@@ -30,6 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout_sec", type=int, default=600)
     parser.add_argument("--parity_max_tol", type=float, default=10.0)
     parser.add_argument("--parity_mean_tol", type=float, default=2.0)
+    parser.add_argument("--parity_mode", choices=["default", "strict"], default="default")
     parser.add_argument("--clash_threshold", type=float, default=1.0)
     parser.add_argument("--top_n_clashes", type=int, default=20)
     parser.add_argument(
@@ -193,7 +194,12 @@ def main() -> int:
     items = _benchmark_items(repo_root)
 
     env = os.environ.copy()
-    env["DIFFPACK_ENABLE_CLASH_GUARD"] = "0"
+    if args.parity_mode == "strict":
+        env["DIFFPACK_ENABLE_CLASH_GUARD"] = "0"
+        args.parity_max_tol = min(args.parity_max_tol, 1e-3)
+        args.parity_mean_tol = min(args.parity_mean_tol, 1e-4)
+    else:
+        env["DIFFPACK_ENABLE_CLASH_GUARD"] = "0"
 
     raw_rows: list[dict[str, Any]] = []
     for repeat in range(1, args.repeats + 1):
@@ -386,6 +392,7 @@ def main() -> int:
             "clash_guard": "disabled",
             "repeats": args.repeats,
             "aggregate_method": args.aggregate,
+            "parity_mode": args.parity_mode,
             "parity_tolerance": {"max_abs_delta": args.parity_max_tol, "mean_abs_delta": args.parity_mean_tol},
         },
         "counts": {

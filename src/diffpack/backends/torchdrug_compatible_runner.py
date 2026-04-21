@@ -67,6 +67,8 @@ class TorchDrugCompatibleRunner:
         cfg.test_set.pdb_files = request.pdb_files
         cfg.test_set.center_residues = request.center_residues
         cfg.test_set.repack_radius = request.repack_radius
+        cfg.test_set.mutation_residues = request.mutation_residues or []
+        cfg.test_set.frozen_residues = request.frozen_residues or []
         cfg.test_set.hetero_policy = request.hetero_policy
         cfg.backend = backend_effective
         cfg.cache = cfg.get("cache", {})

@@ -57,6 +57,22 @@ class TorsionalDiffusion(tasks.Task, core.Configurable):
         self.graph_construction_model = graph_construction_model
         self.verbose = verbose
         self.train_chi_id = train_chi_id
+        self._parity_debug_enabled = False
+        self._last_predict_debug = None
+
+    def set_parity_debug(self, enabled: bool):
+        self._parity_debug_enabled = bool(enabled)
+        self._last_predict_debug = None
+        for model in self.model_list:
+            if hasattr(model, "set_parity_debug"):
+                model.set_parity_debug(enabled)
+        if hasattr(self, "confidence_model") and hasattr(self.confidence_model, "set_parity_debug"):
+            self.confidence_model.set_parity_debug(enabled)
+
+    def pop_last_predict_debug(self):
+        debug = self._last_predict_debug
+        self._last_predict_debug = None
+        return debug
 
     def forward(self, batch):
         all_loss = torch.tensor(0, dtype=torch.float32, device=self.device)
@@ -123,7 +139,8 @@ class TorsionalDiffusion(tasks.Task, core.Configurable):
         # Model forward
         node_sigma = sigma[protein.atom2graph]  # [num_node]
         node_feature = self.sigma_embedding_list[chi_id](protein.node_feature.float(), node_sigma)
-        node_feature = self.model_list[chi_id](protein, node_feature, all_loss=all_loss, metric=metric)["node_feature"]
+        model_output = self.model_list[chi_id](protein, node_feature, all_loss=all_loss, metric=metric)
+        node_feature = model_output["node_feature"]
         residue_feature = scatter_mean(node_feature, protein.atom2residue, dim=0, dim_size=protein.num_residue)
         pred = self.torsion_mlp_list[chi_id](residue_feature)
 
@@ -144,6 +161,17 @@ class TorsionalDiffusion(tasks.Task, core.Configurable):
 
         # Mask out non-related chis
         pred_score = pred_score * protein.chi_mask.to(pred_score.dtype)
+
+        if self._parity_debug_enabled:
+            model_debug = model_output.get("_parity_debug") if isinstance(model_output, dict) else None
+            self._last_predict_debug = {
+                "model_line_graph_edge_list": model_debug.get("line_graph_edge_list") if model_debug else None,
+                "model_layer_node_hidden_last": model_debug.get("layer_node_hidden", [None])[-1] if model_debug else None,
+                "model_layer_edge_hidden_last": model_debug.get("layer_edge_hidden", [None])[-1] if model_debug else None,
+                "predict_graph_chi_mask": protein.chi_mask.detach().cpu(),
+                "model_residue_feature": residue_feature.detach().cpu(),
+                "model_torsion_mlp_output": pred.detach().cpu(),
+            }
 
         return pred_score, score_norm
 

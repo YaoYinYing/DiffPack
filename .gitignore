@@ -25,3 +25,5 @@ src/diffpack/.DS_Store
 /output_torchdrug_mps
 known_issues.md
 known_issues.md
+/outputs_before
+/outputs_mutate

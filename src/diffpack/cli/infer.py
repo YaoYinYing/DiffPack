@@ -36,6 +36,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--repack_radius", type=float, default=None, help="radius in Angstrom for local repacking")
     parser.add_argument(
+        "--mutations",
+        default=None,
+        help="comma-separated mutation tokens in `[chain][old][position][new]` format, e.g. `AG76A,AG65A`",
+    )
+    parser.add_argument(
+        "--pro_remodel_window",
+        choices=["residue_only", "tripeptide", "pentapeptide"],
+        default="tripeptide",
+        help="local backbone remodel window used for X->PRO mutation preprocessing",
+    )
+    parser.add_argument(
+        "--pro_remodel_max_steps",
+        type=int,
+        default=24,
+        help="max deterministic refinement steps for X->PRO mutation preprocessing",
+    )
+    parser.add_argument(
         "--hetero_policy",
         choices=["exclude", "context_only", "error"],
         default="exclude",
@@ -124,12 +141,21 @@ def parse_args(argv: list[str] | None = None):
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if args.repack_radius is not None and not args.center_residues:
+    if args.repack_radius is not None and args.repack_radius < -1:
+        parser.error("`--repack_radius` must be one of -1, 0, or >0.")
+    if args.repack_radius in (-1, 0) and not args.mutations:
+        parser.error("`--repack_radius` values -1 and 0 are only supported when `--mutations` is provided.")
+    if args.repack_radius is not None and args.repack_radius > 0 and not args.center_residues and not args.mutations:
         parser.error("`--center_residues` must be provided when `--repack_radius` is set.")
-    if args.center_residues and args.repack_radius is None:
+    if args.center_residues and args.repack_radius is None and not args.mutations:
         parser.error("`--repack_radius` must be provided when `--center_residues` is set.")
-    if args.repack_radius is not None and args.repack_radius <= 0:
-        parser.error("`--repack_radius` must be > 0.")
+    if args.mutations and args.repack_radius is None:
+        parser.error(
+            "`--repack_radius` must be provided when `--mutations` is set. "
+            "Use -1 (mutated residues only), 0 (full repack), or >0 (local repack)."
+        )
+    if args.pro_remodel_max_steps < 1:
+        parser.error("`--pro_remodel_max_steps` must be >= 1.")
 
     args.output_dir = os.path.realpath(os.path.expanduser(args.output_dir))
     args.config = os.path.realpath(os.path.expanduser(args.config))
@@ -147,12 +173,32 @@ def main(argv: list[str] | None = None):
         run_diagnostics()
         return 0
 
+    config_payload = {}
+    try:
+        with open(args.config, "r", encoding="utf-8") as f:
+            config_payload = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        config_payload = {}
+
+    mutation_cfg = config_payload.get("mutation", {}) if isinstance(config_payload, dict) else {}
+    if isinstance(mutation_cfg, dict):
+        if args.pro_remodel_window == "tripeptide" and "pro_remodel_window" in mutation_cfg:
+            args.pro_remodel_window = str(mutation_cfg["pro_remodel_window"])
+        if args.pro_remodel_max_steps == 24 and "pro_remodel_max_steps" in mutation_cfg:
+            args.pro_remodel_max_steps = int(mutation_cfg["pro_remodel_max_steps"])
+    if args.pro_remodel_window not in {"residue_only", "tripeptide", "pentapeptide"}:
+        raise ValueError(
+            "`pro_remodel_window` must be one of residue_only|tripeptide|pentapeptide. "
+            f"Got `{args.pro_remodel_window}`."
+        )
+    if args.pro_remodel_max_steps < 1:
+        raise ValueError("`pro_remodel_max_steps` must be >= 1.")
+
     backend_name = args.backend
     if backend_name is None:
         try:
-            with open(args.config, "r", encoding="utf-8") as f:
-                backend_name = (yaml.safe_load(f) or {}).get("backend", "native")
-        except FileNotFoundError:
+            backend_name = config_payload.get("backend", "native")
+        except Exception:
             backend_name = "native"
 
     request = InferenceRequest(
@@ -162,6 +208,9 @@ def main(argv: list[str] | None = None):
         pdb_files=args.pdb_files,
         center_residues=args.center_residues,
         repack_radius=args.repack_radius,
+        mutations=args.mutations,
+        pro_remodel_window=args.pro_remodel_window,
+        pro_remodel_max_steps=args.pro_remodel_max_steps,
         hetero_policy=args.hetero_policy,
         device=args.device,
         fast=args.fast,

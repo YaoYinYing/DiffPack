@@ -70,6 +70,13 @@ class GeometryAwareRelationalGraphNeuralNetwork(nn.Module, core.Configurable):
             self.readout = layers.MeanReadout()
         else:
             raise ValueError("Unknown readout `%s`" % readout)
+        self._parity_debug_enabled = False
+        self._last_parity_debug = None
+
+    def set_parity_debug(self, enabled: bool):
+        self._parity_debug_enabled = bool(enabled)
+        if not enabled:
+            self._last_parity_debug = None
 
     def forward(self, graph, input, all_loss=None, metric=None):
         """
@@ -87,9 +94,18 @@ class GeometryAwareRelationalGraphNeuralNetwork(nn.Module, core.Configurable):
         """
         hiddens = []
         layer_input = input
+        debug = None
+        if self._parity_debug_enabled:
+            debug = {
+                "line_graph_edge_list": None,
+                "layer_node_hidden": [],
+                "layer_edge_hidden": [],
+            }
         if self.num_angle_bin:
             line_graph = self.spatial_line_graph(graph)
             edge_input = line_graph.node_feature.float()
+            if debug is not None:
+                debug["line_graph_edge_list"] = line_graph.edge_list.detach().cpu()
 
         for i in range(len(self.layers)):
             hidden = self.layers[i](graph, layer_input)
@@ -106,8 +122,12 @@ class GeometryAwareRelationalGraphNeuralNetwork(nn.Module, core.Configurable):
                 update = self.layers[i].activation(update)
                 hidden = hidden + update
                 edge_input = edge_hidden
+                if debug is not None:
+                    debug["layer_edge_hidden"].append(edge_hidden.detach().cpu())
             if self.batch_norm:
                 hidden = self.batch_norms[i](hidden)
+            if debug is not None:
+                debug["layer_node_hidden"].append(hidden.detach().cpu())
             hiddens.append(hidden)
             layer_input = hidden
 
@@ -117,7 +137,12 @@ class GeometryAwareRelationalGraphNeuralNetwork(nn.Module, core.Configurable):
             node_feature = hiddens[-1]
         graph_feature = self.readout(graph, node_feature)
 
-        return {
+        output = {
             "graph_feature": graph_feature,
             "node_feature": node_feature
         }
+        if debug is not None:
+            self._last_parity_debug = debug
+            output["_parity_debug"] = debug
+
+        return output

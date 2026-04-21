@@ -20,6 +20,11 @@ class InferenceRequest:
     memory_mode: str = "quality"
     cache_root: str | None = None
     cache_read_only: bool = True
+    mutations: Any = None
+    mutation_residues: list[str] | None = None
+    frozen_residues: list[str] | None = None
+    pro_remodel_window: str = "tripeptide"
+    pro_remodel_max_steps: int = 24
 
 
 class BackendAdapter(ABC):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from dataclasses import asdict, dataclass
@@ -81,6 +82,25 @@ def _schedule_stage(task_module, device: torch.device) -> dict[str, Any]:
 
 
 @torch.no_grad()
+def _tensor_stats(x: Any) -> np.ndarray:
+    arr = _as_numpy(x).astype(np.float64, copy=False)
+    if arr.size == 0:
+        return np.zeros((5,), dtype=np.float64)
+    return np.array([arr.mean(), arr.std(), arr.min(), arr.max(), np.linalg.norm(arr)], dtype=np.float64)
+
+
+def _edge_list_stats(edge_list: Any) -> np.ndarray:
+    arr = _as_numpy(edge_list)
+    if arr.size == 0:
+        return np.zeros((4,), dtype=np.float64)
+    if arr.ndim != 2 or arr.shape[1] < 3:
+        return np.array([float(arr.shape[0]), 0.0, 0.0, 0.0], dtype=np.float64)
+    return np.array(
+        [float(arr.shape[0]), float(arr[:, 0].sum()), float(arr[:, 1].sum()), float(arr[:, 2].sum())],
+        dtype=np.float64,
+    )
+
+
 def _generation_stage(task_module, protein, *, randomize: bool, seed: int) -> dict[str, Any]:
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -109,6 +129,15 @@ def _generation_stage(task_module, protein, *, randomize: bool, seed: int) -> di
     step_dt: list[np.ndarray] = []
     step_sigma: list[np.ndarray] = []
     chi_states: list[np.ndarray] = []
+    debug_line_graph_stats: list[np.ndarray] = []
+    debug_node_hidden_stats: list[np.ndarray] = []
+    debug_edge_hidden_stats: list[np.ndarray] = []
+    debug_residue_feature_stats: list[np.ndarray] = []
+    debug_torsion_mlp_stats: list[np.ndarray] = []
+    debug_torsion_mlp_full: list[np.ndarray] = []
+    debug_predict_chi_mask: list[np.ndarray] = []
+    if hasattr(task_module, "set_parity_debug"):
+        task_module.set_parity_debug(True)
 
     for chi_id in range(4):
         per_chi_pred = []
@@ -119,6 +148,13 @@ def _generation_stage(task_module, protein, *, randomize: bool, seed: int) -> di
         per_chi_dt = []
         per_chi_sigma = []
         per_chi_chis = [_as_numpy(rotamer.get_chis(work, work.node_position))]
+        per_chi_dbg_line = []
+        per_chi_dbg_node = []
+        per_chi_dbg_edge = []
+        per_chi_dbg_res = []
+        per_chi_dbg_mlp = []
+        per_chi_dbg_mlp_full = []
+        per_chi_dbg_chi_mask = []
         for j in range(num_step):
             t = schedule[j]
             dt = schedule[j] - schedule[j + 1]
@@ -126,6 +162,7 @@ def _generation_stage(task_module, protein, *, randomize: bool, seed: int) -> di
             sigma = task_module.schedule_1pi_periodic.t_to_sigma(t).repeat(work.batch_size)
             chi_protein = rotamer.remove_by_chi(work, chi_id)
             pred_score, score_norm = task_module.predict({"graph": chi_protein, "sigma": sigma, "chi_id": chi_id})
+            dbg = task_module.pop_last_predict_debug() if hasattr(task_module, "pop_last_predict_debug") else None
             chi_1 = chi_protein.chi_1pi_periodic_mask
             chi_2 = chi_protein.chi_2pi_periodic_mask
             if repack_chi_mask is not None:
@@ -135,6 +172,13 @@ def _generation_stage(task_module, protein, *, randomize: bool, seed: int) -> di
             per_chi_dt.append(float(dt.item()))
             per_chi_sigma.append(_as_numpy(sigma))
             per_chi_norm.append(_as_numpy(score_norm))
+            per_chi_dbg_line.append(_edge_list_stats(dbg.get("model_line_graph_edge_list")) if dbg else np.zeros((4,), dtype=np.float64))
+            per_chi_dbg_node.append(_tensor_stats(dbg.get("model_layer_node_hidden_last")) if dbg else np.zeros((5,), dtype=np.float64))
+            per_chi_dbg_edge.append(_tensor_stats(dbg.get("model_layer_edge_hidden_last")) if dbg else np.zeros((5,), dtype=np.float64))
+            per_chi_dbg_res.append(_tensor_stats(dbg.get("model_residue_feature")) if dbg else np.zeros((5,), dtype=np.float64))
+            per_chi_dbg_mlp.append(_tensor_stats(dbg.get("model_torsion_mlp_output")) if dbg else np.zeros((5,), dtype=np.float64))
+            per_chi_dbg_mlp_full.append(_as_numpy(dbg.get("model_torsion_mlp_output")) if dbg else np.zeros((work.num_residue, 4), dtype=np.float32))
+            per_chi_dbg_chi_mask.append(_as_numpy(dbg.get("predict_graph_chi_mask")) if dbg else np.zeros((work.num_residue, 4), dtype=np.float32))
             per_chi_mask_1pi.append(_as_numpy(chi_1))
             per_chi_mask_2pi.append(_as_numpy(chi_2))
             chis = task_module.schedule_1pi_periodic.step(chis, pred_score, t, dt, chi_1)
@@ -150,6 +194,15 @@ def _generation_stage(task_module, protein, *, randomize: bool, seed: int) -> di
         step_dt.append(np.asarray(per_chi_dt, dtype=np.float32))
         step_sigma.append(np.stack(per_chi_sigma, axis=0) if per_chi_sigma else np.zeros((0, work.batch_size), dtype=np.float32))
         chi_states.append(np.stack(per_chi_chis, axis=0))
+        debug_line_graph_stats.append(np.stack(per_chi_dbg_line, axis=0) if per_chi_dbg_line else np.zeros((0, 4), dtype=np.float64))
+        debug_node_hidden_stats.append(np.stack(per_chi_dbg_node, axis=0) if per_chi_dbg_node else np.zeros((0, 5), dtype=np.float64))
+        debug_edge_hidden_stats.append(np.stack(per_chi_dbg_edge, axis=0) if per_chi_dbg_edge else np.zeros((0, 5), dtype=np.float64))
+        debug_residue_feature_stats.append(np.stack(per_chi_dbg_res, axis=0) if per_chi_dbg_res else np.zeros((0, 5), dtype=np.float64))
+        debug_torsion_mlp_stats.append(np.stack(per_chi_dbg_mlp, axis=0) if per_chi_dbg_mlp else np.zeros((0, 5), dtype=np.float64))
+        debug_torsion_mlp_full.append(np.stack(per_chi_dbg_mlp_full, axis=0) if per_chi_dbg_mlp_full else np.zeros((0, work.num_residue, 4), dtype=np.float32))
+        debug_predict_chi_mask.append(np.stack(per_chi_dbg_chi_mask, axis=0) if per_chi_dbg_chi_mask else np.zeros((0, work.num_residue, 4), dtype=np.float32))
+    if hasattr(task_module, "set_parity_debug"):
+        task_module.set_parity_debug(False)
 
     return {
         "pred_scores": np.stack(pred_scores, axis=0),
@@ -161,6 +214,13 @@ def _generation_stage(task_module, protein, *, randomize: bool, seed: int) -> di
         "step_sigma": np.stack(step_sigma, axis=0),
         "chi_states": np.stack(chi_states, axis=0),
         "final_node_position": _as_numpy(work.node_position),
+        "model_line_graph_edge_stats": np.stack(debug_line_graph_stats, axis=0),
+        "model_layer_node_hidden_stats": np.stack(debug_node_hidden_stats, axis=0),
+        "model_layer_edge_hidden_stats": np.stack(debug_edge_hidden_stats, axis=0),
+        "model_residue_feature_stats": np.stack(debug_residue_feature_stats, axis=0),
+        "model_torsion_mlp_stats": np.stack(debug_torsion_mlp_stats, axis=0),
+        "model_torsion_mlp_full": np.stack(debug_torsion_mlp_full, axis=0),
+        "predict_graph_chi_mask": np.stack(debug_predict_chi_mask, axis=0),
     }
 
 
@@ -199,7 +259,7 @@ def _first_divergence(diffs: list[StageDiff], *, atol: float, mtol: float) -> st
     return None
 
 
-def _load_torchdrug_task_and_protein(cfg, device: torch.device):
+def _load_torchdrug_task_and_protein(cfg, device: torch.device, *, strict_checkpoint: bool):
     from diffpack.torchdrug import core
     from diffpack.torchdrug import data as td_data
     from diffpack import dataset as _dataset  # noqa: F401
@@ -211,7 +271,9 @@ def _load_torchdrug_task_and_protein(cfg, device: torch.device):
     if "model_checkpoint" in cfg and cfg.model_checkpoint:
         ckpt = torch.load(os.path.expanduser(cfg.model_checkpoint), map_location=torch.device("cpu"))
         state = ckpt.get("model", ckpt)
-        task_module.load_state_dict(state, strict=False)
+        missing, unexpected = task_module.load_state_dict(state, strict=False)
+        if strict_checkpoint and missing:
+            raise RuntimeError(f"TorchDrug strict parity checkpoint load failed. missing_keys={missing[:20]}")
     task_module = task_module.to(device)
     test_set = core.Configurable.load_config_dict(cfg.test_set)
     item = test_set.get_item(0)
@@ -222,7 +284,7 @@ def _load_torchdrug_task_and_protein(cfg, device: torch.device):
     return task_module, protein
 
 
-def _load_framework_task_and_protein(cfg, device: torch.device, backend: str):
+def _load_framework_task_and_protein(cfg, device: torch.device, backend: str, *, strict_checkpoint: bool):
     if backend == "pyg":
         from diffpack.backends.pyg_runtime import PygConfigTranslator
 
@@ -237,7 +299,11 @@ def _load_framework_task_and_protein(cfg, device: torch.device, backend: str):
     if "model_checkpoint" in cfg and cfg.model_checkpoint:
         ckpt = torch.load(os.path.expanduser(cfg.model_checkpoint), map_location=torch.device("cpu"))
         state = ckpt.get("model", ckpt)
-        task_module.load_state_dict(state, strict=False)
+        missing, unexpected = task_module.load_state_dict(state, strict=False)
+        if strict_checkpoint and missing:
+            raise RuntimeError(
+                f"{backend} strict parity checkpoint load failed. missing_keys={missing[:20]} unexpected_keys={unexpected[:20]}"
+            )
     dataset = translator.build_dataset()
     item = dataset.get_item(0)
     item = move_to_device(item, device)
@@ -260,6 +326,7 @@ def parse_args():
     parser.add_argument("--max_abs_tolerance", type=float, default=1e-5)
     parser.add_argument("--mean_tolerance", type=float, default=1e-6)
     parser.add_argument("--equal_nan", action="store_true", help="treat matching NaN values as equal in diffs")
+    parser.add_argument("--parity_mode", choices=["default", "strict"], default="default")
     return parser.parse_args()
 
 
@@ -277,6 +344,7 @@ def main():
     device = choose_torch_device(args.device)
 
     cfg = util.load_config(os.path.realpath(args.config))
+    cfg_hash = hashlib.sha256(json.dumps(cfg, sort_keys=True, default=str).encode("utf-8")).hexdigest()
     cfg.test_set.pdb_files = [os.path.realpath(args.pdb_file)]
     cfg.test_set.center_residues = args.center_residues
     cfg.test_set.repack_radius = args.repack_radius
@@ -291,8 +359,9 @@ def main():
                 cfg.task[skey]["cache_folder"] = cache_root
                 cfg.task[skey]["cache_read_only"] = True
 
-    td_task, td_protein = _load_torchdrug_task_and_protein(cfg, device)
-    run_task, run_protein = _load_framework_task_and_protein(cfg, device, args.backend)
+    strict_checkpoint = args.parity_mode == "strict"
+    td_task, td_protein = _load_torchdrug_task_and_protein(cfg, device, strict_checkpoint=strict_checkpoint)
+    run_task, run_protein = _load_framework_task_and_protein(cfg, device, args.backend, strict_checkpoint=strict_checkpoint)
 
     trace_td = {
         "dataset": _pack_protein_stage(td_protein),
@@ -321,6 +390,13 @@ def main():
         _summarize_delta(trace_td["generation"]["mask_2pi"], trace_run["generation"]["mask_2pi"], "generation.mask_2pi", equal_nan=args.equal_nan),
         _summarize_delta(trace_td["generation"]["score_norms"], trace_run["generation"]["score_norms"], "generation.score_norms", equal_nan=args.equal_nan),
         _summarize_delta(trace_td["generation"]["pred_scores"], trace_run["generation"]["pred_scores"], "generation.pred_scores", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["generation"]["model_line_graph_edge_stats"], trace_run["generation"]["model_line_graph_edge_stats"], "model.line_graph_edge_stats", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["generation"]["model_layer_node_hidden_stats"], trace_run["generation"]["model_layer_node_hidden_stats"], "model.layer_node_hidden_stats", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["generation"]["model_layer_edge_hidden_stats"], trace_run["generation"]["model_layer_edge_hidden_stats"], "model.layer_edge_hidden_stats", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["generation"]["model_residue_feature_stats"], trace_run["generation"]["model_residue_feature_stats"], "model.residue_feature_stats", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["generation"]["model_torsion_mlp_stats"], trace_run["generation"]["model_torsion_mlp_stats"], "model.torsion_mlp_stats", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["generation"]["model_torsion_mlp_full"], trace_run["generation"]["model_torsion_mlp_full"], "model.torsion_mlp_full", equal_nan=args.equal_nan),
+        _summarize_delta(trace_td["generation"]["predict_graph_chi_mask"], trace_run["generation"]["predict_graph_chi_mask"], "model.predict_graph_chi_mask", equal_nan=args.equal_nan),
         _summarize_delta(trace_td["generation"]["chi_states"], trace_run["generation"]["chi_states"], "generation.chi_states", equal_nan=args.equal_nan),
         _summarize_delta(trace_td["generation"]["final_node_position"], trace_run["generation"]["final_node_position"], "generation.final_node_position", equal_nan=args.equal_nan),
     ]
@@ -338,6 +414,9 @@ def main():
             "max_abs_tolerance": args.max_abs_tolerance,
             "mean_tolerance": args.mean_tolerance,
             "equal_nan": args.equal_nan,
+            "parity_mode": args.parity_mode,
+            "strict_checkpoint": strict_checkpoint,
+            "config_hash": cfg_hash,
         },
         "stage_diffs": [asdict(d) for d in diffs],
     }
@@ -356,6 +435,13 @@ def main():
         "generation_mask_2pi": trace_td["generation"]["mask_2pi"],
         "generation_score_norms": trace_td["generation"]["score_norms"],
         "generation_pred_scores": trace_td["generation"]["pred_scores"],
+        "model_line_graph_edge_stats": trace_td["generation"]["model_line_graph_edge_stats"],
+        "model_layer_node_hidden_stats": trace_td["generation"]["model_layer_node_hidden_stats"],
+        "model_layer_edge_hidden_stats": trace_td["generation"]["model_layer_edge_hidden_stats"],
+        "model_residue_feature_stats": trace_td["generation"]["model_residue_feature_stats"],
+        "model_torsion_mlp_stats": trace_td["generation"]["model_torsion_mlp_stats"],
+        "model_torsion_mlp_full": trace_td["generation"]["model_torsion_mlp_full"],
+        "predict_graph_chi_mask": trace_td["generation"]["predict_graph_chi_mask"],
         "generation_chi_states": trace_td["generation"]["chi_states"],
         "generation_final_node_position": trace_td["generation"]["final_node_position"],
     })
@@ -373,6 +459,13 @@ def main():
         "generation_mask_2pi": trace_run["generation"]["mask_2pi"],
         "generation_score_norms": trace_run["generation"]["score_norms"],
         "generation_pred_scores": trace_run["generation"]["pred_scores"],
+        "model_line_graph_edge_stats": trace_run["generation"]["model_line_graph_edge_stats"],
+        "model_layer_node_hidden_stats": trace_run["generation"]["model_layer_node_hidden_stats"],
+        "model_layer_edge_hidden_stats": trace_run["generation"]["model_layer_edge_hidden_stats"],
+        "model_residue_feature_stats": trace_run["generation"]["model_residue_feature_stats"],
+        "model_torsion_mlp_stats": trace_run["generation"]["model_torsion_mlp_stats"],
+        "model_torsion_mlp_full": trace_run["generation"]["model_torsion_mlp_full"],
+        "predict_graph_chi_mask": trace_run["generation"]["predict_graph_chi_mask"],
         "generation_chi_states": trace_run["generation"]["chi_states"],
         "generation_final_node_position": trace_run["generation"]["final_node_position"],
     })

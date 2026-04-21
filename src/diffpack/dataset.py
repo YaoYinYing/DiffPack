@@ -26,20 +26,26 @@ class SideChainDataset(data.ProteinDataset):
     def __init__(self, path=None, pdb_files=None, verbose=1, **kwargs):
         center_residues = kwargs.pop("center_residues", None)
         repack_radius = kwargs.pop("repack_radius", None)
+        mutation_residues = kwargs.pop("mutation_residues", None)
+        frozen_residues = kwargs.pop("frozen_residues", None)
         center_residues = center_residues or []
+        mutation_residues = mutation_residues or []
+        frozen_residues = frozen_residues or []
         self.center_residue_selectors = repack.parse_center_residue_selectors(center_residues)
+        self.mutation_residue_selectors = repack.parse_center_residue_selectors(mutation_residues)
+        self.frozen_residue_selectors = repack.parse_center_residue_selectors(frozen_residues)
         self.repack_radius = repack_radius
         self.hetero_policy = kwargs.pop("hetero_policy", "exclude")
         if self.hetero_policy not in {"exclude", "context_only", "error"}:
             raise ValueError("`hetero_policy` must be one of: exclude, context_only, error")
         self._temp_pdb_dir = tempfile.mkdtemp(prefix="diffpack_pdb_")
 
-        if self.repack_radius is not None and len(self.center_residue_selectors) == 0:
+        if self.repack_radius is not None and self.repack_radius > 0 and len(self.center_residue_selectors) == 0:
             raise ValueError("`center_residues` must be provided when `repack_radius` is set.")
-        if self.repack_radius is None and len(self.center_residue_selectors) > 0:
+        if self.repack_radius is None and (len(self.center_residue_selectors) > 0 or len(self.mutation_residue_selectors) > 0):
             raise ValueError("`repack_radius` must be provided when `center_residues` is set.")
-        if self.repack_radius is not None and self.repack_radius <= 0:
-            raise ValueError(f"`repack_radius` must be > 0, got {self.repack_radius}.")
+        if self.repack_radius is not None and self.repack_radius < -1:
+            raise ValueError(f"`repack_radius` must be one of -1, 0, or >0. Got {self.repack_radius}.")
 
         if path is not None:
             logger.info("Loading dataset from folder %s" % path)
@@ -177,6 +183,24 @@ class SideChainDataset(data.ProteinDataset):
 
             if self.repack_radius is None:
                 protein.repack_residue_mask = torch.ones(protein.num_residue, dtype=torch.bool, device=protein.device)
+            elif self.repack_radius == 0:
+                protein.repack_residue_mask = torch.ones(protein.num_residue, dtype=torch.bool, device=protein.device)
+            elif self.repack_radius == -1:
+                if len(self.mutation_residue_selectors) == 0:
+                    raise ValueError("`mutation_residues` must be provided when `repack_radius` is -1.")
+                try:
+                    residue_identifiers = repack.load_residue_identifiers_from_protein(protein)
+                except Exception:
+                    parsed_pdb_files = getattr(self, "parsed_pdb_files", self.pdb_files)
+                    residue_identifiers = repack.load_residue_identifiers_from_pdb(
+                        parsed_pdb_files[index], allowed_residue_names=rotamer.residue_list
+                    )
+                protein.repack_residue_mask = repack.select_residues_exact(
+                    num_residue=protein.num_residue,
+                    residue_identifiers=residue_identifiers,
+                    selectors=self.mutation_residue_selectors,
+                    device=protein.device,
+                )
             else:
                 try:
                     residue_identifiers = repack.load_residue_identifiers_from_protein(protein)
@@ -200,6 +224,22 @@ class SideChainDataset(data.ProteinDataset):
                     int(protein.num_residue),
                     os.path.basename(self.pdb_files[index]),
                 )
+
+            if len(self.frozen_residue_selectors) > 0:
+                try:
+                    residue_identifiers = repack.load_residue_identifiers_from_protein(protein)
+                except Exception:
+                    parsed_pdb_files = getattr(self, "parsed_pdb_files", self.pdb_files)
+                    residue_identifiers = repack.load_residue_identifiers_from_pdb(
+                        parsed_pdb_files[index], allowed_residue_names=rotamer.residue_list
+                    )
+                frozen_mask = repack.select_residues_exact(
+                    num_residue=protein.num_residue,
+                    residue_identifiers=residue_identifiers,
+                    selectors=self.frozen_residue_selectors,
+                    device=protein.device,
+                )
+                protein.repack_residue_mask = protein.repack_residue_mask & (~frozen_mask)
         item = {"graph": protein}
 
         if self.transform:

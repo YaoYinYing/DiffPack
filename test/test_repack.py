@@ -53,3 +53,13 @@ def test_select_residues_by_radius_missing_center():
             center_selectors=[("A", 2)],
             radius=4.0,
         )
+
+
+def test_select_residues_exact():
+    mask = repack.select_residues_exact(
+        num_residue=3,
+        residue_identifiers=[("A", 1), ("A", 2), ("B", 5)],
+        selectors=[("A", 2), ("B", 5)],
+        device=torch.device("cpu"),
+    )
+    assert mask.tolist() == [False, True, True]

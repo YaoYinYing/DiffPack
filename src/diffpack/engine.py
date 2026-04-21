@@ -6,6 +6,7 @@ from diffpack.torchdrug import core, data
 from diffpack.torchdrug.utils import comm
 
 from diffpack.device import move_to_device
+from diffpack.pdb_connectivity import append_conect_records_inplace
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class DiffusionEngine(core.Engine):
                 protein = p.cpu()
                 output_path = os.path.join(path, pdb_file)
                 protein.to_pdb(output_path)
+                append_conect_records_inplace(output_path)
                 output_files.append(output_path)
                 sample_id += 1
 

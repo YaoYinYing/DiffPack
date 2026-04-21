@@ -29,6 +29,7 @@ def parse_args():
     parser.add_argument("--reference_backend", choices=["native", "torchdrug", "pyg"], default=None)
     parser.add_argument("--parity_max_abs_tolerance", type=float, default=10.0)
     parser.add_argument("--parity_mean_tolerance", type=float, default=2.0)
+    parser.add_argument("--parity_mode", choices=["default", "strict"], default="default")
     parser.add_argument("--clash_threshold", type=float, default=1.0)
     parser.add_argument("--top_n_clashes", type=int, default=20)
     return parser.parse_args()
@@ -54,6 +55,8 @@ def _compute_pdb_deltas(pred_pdb: str, ref_pdb: str) -> dict[str, float]:
 
 def main():
     args = parse_args()
+    if args.parity_mode == "strict":
+        os.environ["DIFFPACK_ENABLE_CLASH_GUARD"] = "0"
     request = InferenceRequest(
         config=os.path.realpath(args.config),
         seed=args.seed,
@@ -74,6 +77,7 @@ def main():
     result["wall_elapsed_sec"] = elapsed
     result["benchmark_backend"] = args.backend
     result["benchmark_device"] = args.device
+    result["parity_mode"] = args.parity_mode
 
     checker_reports = []
     output_files = result.get("output_files", [])

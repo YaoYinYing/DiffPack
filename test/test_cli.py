@@ -38,6 +38,41 @@ def test_parse_args_success():
     assert args.cache_read_only is True
     assert args.cache_root.endswith("/tmp/diffpack_cache_test")
     assert args.memory_mode == "balanced"
+    assert args.pro_remodel_window == "tripeptide"
+    assert args.pro_remodel_max_steps == 24
+
+
+def test_parse_args_pro_remodel_controls():
+    args = infer.parse_args(
+        [
+            "--mutations",
+            "AA46P",
+            "--repack_radius",
+            "10",
+            "--pro_remodel_window",
+            "pentapeptide",
+            "--pro_remodel_max_steps",
+            "40",
+        ]
+    )
+    assert args.pro_remodel_window == "pentapeptide"
+    assert args.pro_remodel_max_steps == 40
+
+
+def test_parse_args_mutation_requires_repack_radius():
+    with pytest.raises(SystemExit):
+        infer.parse_args(["--mutations", "AG76A"])
+
+
+def test_parse_args_mutation_accepts_zero_radius():
+    args = infer.parse_args(["--mutations", "AG76A", "--repack_radius", "0"])
+    assert args.mutations == "AG76A"
+    assert args.repack_radius == 0
+
+
+def test_parse_args_repack_minus_one_requires_mutation():
+    with pytest.raises(SystemExit):
+        infer.parse_args(["--repack_radius", "-1"])
 
 
 def test_run_diagnostics_outputs_json(capsys):
