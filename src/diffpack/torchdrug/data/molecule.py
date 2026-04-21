@@ -12,7 +12,6 @@ from torch_scatter import scatter_add, scatter_min
 from diffpack.torchdrug import utils
 from diffpack.torchdrug.data import constant, Graph, PackedGraph
 from diffpack.torchdrug.core import Registry as R
-from diffpack.torchdrug.data.rdkit import draw
 from diffpack.torchdrug.utils import pretty
 
 plt.switch_backend("agg")
@@ -576,6 +575,7 @@ class Molecule(Graph):
         if not atom_map:
             for atom in mol.GetAtoms():
                 atom.SetAtomMapNum(0)
+        from diffpack.torchdrug.data.rdkit import draw
         draw.MolToMPL(mol, ax=ax)
         ax.set_frame_on(False)
 
