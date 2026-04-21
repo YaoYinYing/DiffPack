@@ -34,6 +34,7 @@ dependencies = [
   "jinja2>=3.1",
   "tqdm>=4.66",
   "biopython>=1.77",
+  "decorator>=5.1.1",
 ]
 
 [project.optional-dependencies]
@@ -47,7 +48,6 @@ torchdrug = [
   "matplotlib",
   "networkx",
   "ninja",
-  "decorator",
 ]
 pyg = [
   "torch-geometric>=2.6.0",
